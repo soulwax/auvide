@@ -87,6 +87,14 @@ Real-ESRGAN is GPU-bound. Rough throughput on an **Intel Iris Xe** (integrated,
 **2 hours per 5,000 frames**. A discrete NVIDIA/AMD GPU is dramatically faster.
 The `x4plus` model is sharper but slower and needs more VRAM.
 
+## Roadmap
+
+- **GUI front-end** (planned) — a Tkinter desktop window (file picker / drag-drop,
+  scale/model/vibrance/HDR dropdowns, live progress bar) wrapping the existing
+  pipeline. The CLI stays the engine; the GUI just calls `main()`'s logic.
+- **Standalone `.exe`** — package GUI + `bin/` with PyInstaller for double-click use.
+- **QSV HDR validation** — confirm/tune the `--encoder qsv` HDR10 metadata path.
+
 ## Credits
 
 - [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) — Xintao Wang et al.
