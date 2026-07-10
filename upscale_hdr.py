@@ -169,9 +169,13 @@ def encode_cmd(args, info, in_pattern: str, start_number: int, out_file: Path) -
     return cmd
 
 
+# suppress child-process console windows when driven from a GUI (Windows only)
+_NOWINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+
 def run(cmd: list[str], quiet: bool = True) -> None:
     r = subprocess.run(cmd, stdout=subprocess.DEVNULL if quiet else None,
-                       stderr=subprocess.PIPE, text=True)
+                       stderr=subprocess.PIPE, text=True, creationflags=_NOWINDOW)
     if r.returncode != 0:
         die(f"command failed ({cmd[0]}):\n{r.stderr[-2000:]}")
 

@@ -51,6 +51,22 @@ python upscale_hdr.py "movie.mp4" --resume
 
 Or drag a video file onto **`run.bat`** to process it with defaults.
 
+### GUI
+
+A desktop front-end is included. It's a thin wrapper — it collects options,
+launches the same `upscale_hdr.py` engine as a subprocess, streams its log, and
+shows a progress bar driven by the CLI's per-chunk output.
+
+```powershell
+# uv provides Python + tkinter (no system Python needed)
+uv run --python 3.12 gui.py
+```
+
+Or double-click **`run-gui.bat`**. Pick an input video, tweak the dropdowns
+(scale / model / vibrance / HDR / encoder), and hit **Start**. "Show command"
+prints the equivalent CLI invocation; **Cancel** stops the run (re-launch with
+Resume ticked to continue where it left off).
+
 ### Options
 
 | flag | default | meaning |
@@ -89,9 +105,8 @@ The `x4plus` model is sharper but slower and needs more VRAM.
 
 ## Roadmap
 
-- **GUI front-end** (planned) — a Tkinter desktop window (file picker / drag-drop,
-  scale/model/vibrance/HDR dropdowns, live progress bar) wrapping the existing
-  pipeline. The CLI stays the engine; the GUI just calls `main()`'s logic.
+- ✅ **GUI front-end** — `gui.py`, a Tkinter window over the CLI (see above).
+- **Drag-and-drop** onto the GUI window (needs the optional `tkinterdnd2` package).
 - **Standalone `.exe`** — package GUI + `bin/` with PyInstaller for double-click use.
 - **QSV HDR validation** — confirm/tune the `--encoder qsv` HDR10 metadata path.
 
