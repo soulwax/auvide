@@ -17,11 +17,17 @@
 *.tiff
 
 # --- output / scratch dirs ---
-/output/
+# keep the folders in the repo (via .gitkeep) but ignore their contents
+/output/*
+!/output/.gitkeep
 /out/
 /work/
 /frames/
 /segments/
+
+# --- project egg-info / build ---
+*.egg-info/
+uv.lock
 
 # --- bundled third-party binaries (provision with setup.ps1) ---
 # ffmpeg.exe / ffprobe.exe exceed GitHub's 100 MB file limit and are

@@ -33,6 +33,18 @@ GitHub's 100 MB file limit) — `setup.ps1` fetches them. The only Python
 dependency is Pillow (live preview); everything else is stdlib. `pyproject.toml`
 also exposes `auvide` / `auvide-gui` console scripts if you `pip install .`.
 
+## Project layout
+
+```
+input/    <- put source videos here (CLI/GUI auto-pick a lone video)
+output/   <- renders land here
+bin/      <- bundled ffmpeg / ffprobe / realesrgan + models (provisioned)
+legacy/   <- the earlier standalone vibrant_upscale.py, kept for reference
+```
+
+With one video in `input/`, just run `python upscale_hdr.py` — no arguments
+needed. The GUI auto-loads it too.
+
 ---
 
 ## Usage

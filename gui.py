@@ -43,6 +43,9 @@ FFMPEG = HERE / "bin" / "ffmpeg.exe"
 FFPROBE = HERE / "bin" / "ffprobe.exe"
 CONFIG = Path(os.environ.get("LOCALAPPDATA", HERE)) / "auvide" / "gui.json"
 PREVIEW_DIR = Path(os.environ.get("TEMP", HERE)) / "auvide" / "preview"
+INPUT_DIR = HERE / "input"
+OUTPUT_DIR = HERE / "output"
+VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v"}
 
 SCALES = ["2", "3", "4"]
 MODELS = ["animevideo", "x4plus", "x4plus-anime"]
@@ -179,6 +182,7 @@ class App:
         self._build_vars()
         self._build_ui()
         self._load_config()
+        self._autoload_input()
         self._poll()
         self._tick_elapsed()
         root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -414,10 +418,19 @@ class App:
             return
         p = Path(src)
         tag = "hdr" if self.v_hdr.get() == "on" else "sdr"
-        self.v_out.set(str(p.with_name(f"{p.stem}_{self.v_scale.get()}x_{tag}.mp4")))
+        self.v_out.set(str(OUTPUT_DIR / f"{p.stem}_{self.v_scale.get()}x_{tag}.mp4"))
+
+    def _autoload_input(self):
+        if self.v_in.get().strip() or not INPUT_DIR.exists():
+            return
+        vids = [p for p in sorted(INPUT_DIR.glob("*")) if p.suffix.lower() in VIDEO_EXTS]
+        if len(vids) == 1:
+            self.v_in.set(str(vids[0]))
 
     def _browse_in(self):
-        f = filedialog.askopenfilename(title="Choose a video", filetypes=VIDEO_TYPES)
+        start = str(INPUT_DIR if INPUT_DIR.exists() else HERE)
+        f = filedialog.askopenfilename(title="Choose a video", filetypes=VIDEO_TYPES,
+                                       initialdir=start)
         if f:
             self.out_edited = False
             self.v_in.set(f)

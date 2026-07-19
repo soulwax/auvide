@@ -40,6 +40,9 @@ FFMPEG = BIN / "ffmpeg.exe"
 FFPROBE = BIN / "ffprobe.exe"
 REALESRGAN = BIN / "realesrgan-ncnn-vulkan.exe"
 MODELS = BIN / "models"
+INPUT_DIR = HERE / "input"
+OUTPUT_DIR = HERE / "output"
+VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v"}
 
 # model key -> (realesrgan model name, native scale or None for "any 2/3/4")
 MODEL_MAP = {
@@ -57,6 +60,23 @@ MAX_CLL = "1000,400"
 def die(msg: str) -> None:
     print(f"\n[error] {msg}", file=sys.stderr)
     sys.exit(1)
+
+
+def resolve_input(arg) -> Path:
+    """Explicit path if given, else the single video in ./input."""
+    if arg:
+        p = Path(arg).resolve()
+        if not p.exists():
+            die(f"input not found: {p}")
+        return p
+    vids = ([p for p in sorted(INPUT_DIR.glob("*")) if p.suffix.lower() in VIDEO_EXTS]
+            if INPUT_DIR.exists() else [])
+    if len(vids) == 1:
+        return vids[0].resolve()
+    if not vids:
+        die(f"no input given and no video found in {INPUT_DIR}")
+    die("multiple videos in ./input — pass one explicitly: "
+        + ", ".join(p.name for p in vids))
 
 
 def check_deps() -> None:
@@ -195,8 +215,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description="AI upscale a video and remap it to vibrant HDR10.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    ap.add_argument("input", type=Path, help="source video file")
-    ap.add_argument("-o", "--output", type=Path, help="output file (default: <name>_2x_hdr.mp4)")
+    ap.add_argument("input", nargs="?", type=Path,
+                    help="source video (default: the single video in ./input)")
+    ap.add_argument("-o", "--output", type=Path,
+                    help="output file (default: ./output/<name>_<scale>x_<hdr|sdr>.mp4)")
     ap.add_argument("--scale", type=int, default=2, choices=[2, 3, 4], help="upscale factor")
     ap.add_argument("--model", default="animevideo", choices=list(MODEL_MAP),
                     help="Real-ESRGAN model (animevideo=fast/video, x4plus=sharp photo)")
@@ -229,9 +251,7 @@ def main() -> None:
     args = ap.parse_args()
 
     check_deps()
-    src = args.input.resolve()
-    if not src.exists():
-        die(f"input not found: {src}")
+    src = resolve_input(args.input)
 
     info = probe(src)
     if info["total"] <= 0:
@@ -247,9 +267,9 @@ def main() -> None:
         args.rescale_to = None
     tw, th = info["width"] * args.scale, info["height"] * args.scale
 
-    out = args.output or src.with_name(f"{src.stem}_{args.scale}x_"
-                                       f"{'hdr' if args.hdr=='on' else 'sdr'}.mp4")
-    out = out.resolve()
+    out = (args.output or OUTPUT_DIR / f"{src.stem}_{args.scale}x_"
+           f"{'hdr' if args.hdr=='on' else 'sdr'}.mp4").resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
 
     work = (args.work or Path(tempfile.gettempdir()) / "auvide" / src.stem).resolve()
     frames_in = work / "frames_in"
