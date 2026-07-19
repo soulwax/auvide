@@ -84,11 +84,20 @@ Or double-click **`run-gui.bat`**. Two tabs:
 - **Render** — pick an input, set scale / model / HDR / encoder, hit **Start**.
   "Show command" prints the equivalent CLI; **Cancel** stops the run (re-launch
   with Resume ticked to continue).
-- **Grade & Preview** — **Load frame**, then dial the grade with live sliders
-  (saturation, vibrance, contrast, midtones, warmth, sharpen) and watch a real
-  **before/after** on that frame — drag anywhere on the image to move the wipe
-  divider. The grade you tune here is exactly what the render applies (both use
-  `grade.py`), so you never wait for a full run to judge the look.
+- **Grade & Preview** — the frame loads automatically; **scrub the timeline**
+  (or ◀ ▶) to check the grade anywhere in the clip. Dial the look with live
+  sliders (saturation, vibrance, contrast, midtones, warmth, sharpen) and watch
+  a real **before/after** — drag the image to move the wipe divider, **hold
+  Space** (or the button) to flash the untouched original, **double-click** any
+  slider to reset it. The grade you tune here is exactly what the render applies
+  (both use `grade.py`), so you never wait for a full run to judge the look.
+
+No GUI? Get the same comparison from the CLI without a full run:
+
+```powershell
+python upscale_hdr.py --preview            # before/after stills at 20/50/80%
+python upscale_hdr.py --preview --at 25,95 # at chosen seconds -> output/preview/
+```
 
 ### Options
 
@@ -108,6 +117,8 @@ Or double-click **`run-gui.bat`**. Two tabs:
 | `--warmth F` | | `-1` cool … `+1` warm (negative neutralizes a warm cast) |
 | `--sharpen F` | | unsharp amount, `0..1.5` |
 | `--hdr-gain F` | `1.5` | HDR highlight expansion (HDR mode only) |
+| `--preview` | | render before/after grade stills to `output/preview/`, then exit |
+| `--at S,S,…` | *(20/50/80%)* | timestamps (seconds) for `--preview` |
 | `--chunk N` | `300` | frames per encode chunk (bounds disk use) |
 | `--gpu N` | `0` | Real-ESRGAN GPU id (`-1` = CPU) |
 | `--tile N` | `0` | tile size (0 = auto); lower it if you hit VRAM OOM |

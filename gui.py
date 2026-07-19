@@ -172,8 +172,13 @@ class App:
         self._tkimg = None
         self._divx = self.PW // 2
         self._pgen = 0
+        self._fgen = 0
         self._render_after = None
-        self._loaded_key = None
+        self._frame_after = None
+        self._loaded = False
+        self._show_orig = False
+        self._ab_off_after = None
+        self._preset_defaults = grade.PRESETS["vibrant"]
         root.title("auvide  ·  AI upscale + vibrant HDR10")
         root.minsize(940, 720)
         apply_theme(root)
@@ -209,7 +214,8 @@ class App:
         self.v_elapsed = tk.StringVar(value="")
         self.v_plan = tk.StringVar(value="No file selected.")
         self.v_ptime = tk.DoubleVar(value=5.0)
-        self.v_pstatus = tk.StringVar(value="Load a frame to preview the grade.")
+        self.v_ptimelabel = tk.StringVar(value="0:00 / 0:00")
+        self.v_pstatus = tk.StringVar(value="Choose a video to preview the grade.")
         # grade vars from the 'vibrant' preset
         base = grade.PRESETS["vibrant"]
         self.g_vars = {k: tk.DoubleVar(value=getattr(base, k))
@@ -343,14 +349,23 @@ class App:
         body.rowconfigure(1, weight=1)
 
         top = ttk.Frame(body); top.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        ttk.Label(top, text="Frame at").pack(side="left", padx=(4, 4))
-        ttk.Spinbox(top, from_=0, to=100000, increment=1, textvariable=self.v_ptime,
-                    width=7).pack(side="left")
-        ttk.Label(top, text="s", style="Muted.TLabel").pack(side="left", padx=(2, 8))
-        self.btn_loadframe = ttk.Button(top, text="Load frame", style="Accent.TButton",
-                                        command=self._load_sample)
-        self.btn_loadframe.pack(side="left")
-        ttk.Label(top, textvariable=self.v_pstatus, style="Muted.TLabel").pack(side="left", padx=12)
+        top.columnconfigure(2, weight=1)
+        ttk.Button(top, text="◀", width=3, command=lambda: self._step_frame(-1)).grid(row=0, column=0)
+        ttk.Button(top, text="▶", width=3, command=lambda: self._step_frame(1)).grid(row=0, column=1, padx=(4, 8))
+        self.scrub = ttk.Scale(top, from_=0, to=1, orient="horizontal", variable=self.v_ptime,
+                               command=lambda v: self._on_scrub())
+        self.scrub.grid(row=0, column=2, sticky="ew")
+        ttk.Label(top, textvariable=self.v_ptimelabel, style="Val.TLabel", width=12).grid(
+            row=0, column=3, padx=(8, 8))
+        self.btn_ab = ttk.Button(top, text="Hold: original")
+        self.btn_ab.grid(row=0, column=4)
+        self.btn_ab.bind("<ButtonPress-1>", lambda e: self._ab(True))
+        self.btn_ab.bind("<ButtonRelease-1>", lambda e: self._ab(False))
+        Tooltip(self.btn_ab, "Hold (or press Space) to flash the untouched original.")
+        ttk.Label(body, textvariable=self.v_pstatus, style="Muted.TLabel").grid(
+            row=4, column=0, sticky="w", padx=4, pady=(6, 0))
+        self.root.bind("<KeyPress-space>", lambda e: self._ab(True))
+        self.root.bind("<KeyRelease-space>", lambda e: self._ab(False))
 
         # preview canvas
         if HAVE_PIL:
@@ -360,8 +375,8 @@ class App:
             self.canvas.bind("<Button-1>", self._wipe)
             self.canvas.bind("<B1-Motion>", self._wipe)
             self.canvas.create_text(self.PW // 2, self.PH // 2, fill=MUTED, font=FONT,
-                                    text="Load a frame to see BEFORE | AFTER — drag to wipe.",
-                                    tags="hint")
+                                    text="Scrub the timeline above to load a frame — then drag "
+                                    "here to wipe BEFORE | AFTER.", tags="hint")
         else:
             self.canvas = None
             warn = ttk.Frame(body, style="TFrame", padding=20)
@@ -378,7 +393,8 @@ class App:
             ttk.Label(gf, text=label).grid(row=i, column=0, sticky="w", padx=(4, 10), pady=3)
             sc = ttk.Scale(gf, from_=lo, to=hi, orient="horizontal", variable=self.g_vars[key])
             sc.grid(row=i, column=1, sticky="ew", pady=3)
-            Tooltip(sc, tip)
+            sc.bind("<Double-Button-1>", lambda e, kk=key: self._reset_slider(kk))
+            Tooltip(sc, tip + "  (double-click to reset)")
             ttk.Label(gf, textvariable=self.g_labels[key], style="Val.TLabel").grid(
                 row=i, column=2, padx=(10, 4))
 
@@ -403,8 +419,12 @@ class App:
 
     def _apply_grade_preset(self, name):
         g = grade.PRESETS[name]
+        self._preset_defaults = g
         for k, *_ in GRADE_SLIDERS:
             self.g_vars[k].set(getattr(g, k))
+
+    def _reset_slider(self, key):
+        self.g_vars[key].set(getattr(self._preset_defaults, key))
 
     def _on_grade_change(self, key):
         self.g_labels[key].set(self._fmt(self.g_vars[key].get()))
@@ -479,8 +499,17 @@ class App:
         self.v_plan.set(
             f"Source {w}×{h} · {fps:.2f} fps · {mm}:{ss:02d} · {frames} frames"
             f"     →     Target {w*scale}×{h*scale} · ~{self._hms(frames*per)} to render")
-        if self.v_ptime.get() == 5.0 and dur > 10:
-            self.v_ptime.set(round(dur / 2))
+
+    def _on_media_ready(self):
+        """Media probed: set the scrubber range and auto-load a frame."""
+        if not HAVE_PIL or not self.info:
+            return
+        dur = self.info["dur"]
+        self.scrub.configure(to=max(0.1, dur))
+        if not self._loaded:
+            self.v_ptime.set(round(dur / 2) if dur > 4 else 0.0)
+            self._request_frame()
+        self.v_ptimelabel.set(self._timelabel())
 
     @staticmethod
     def _hms(sec):
@@ -488,29 +517,71 @@ class App:
         return f"{h}h{m:02d}m" if h else f"{m}m{s:02d}s"
 
     # ---- preview --------------------------------------------------------
-    def _load_sample(self):
+    def _timelabel(self):
+        dur = self.info["dur"] if self.info else 0
+        t = self.v_ptime.get()
+        return f"{int(t)//60}:{int(t)%60:02d} / {int(dur)//60}:{int(dur)%60:02d}"
+
+    def _on_scrub(self):
+        self.v_ptimelabel.set(self._timelabel())
+        self._request_frame()
+
+    def _step_frame(self, direction):
+        fps = self.info["fps"] if self.info else 24.0
+        dur = self.info["dur"] if self.info else self.v_ptime.get()
+        step = max(1.0 / fps, 0.04)
+        self.v_ptime.set(min(max(0.0, self.v_ptime.get() + direction * step), max(0.0, dur)))
+        self._on_scrub()
+
+    def _request_frame(self):
+        """Debounced: extract the frame at the current scrubber time."""
         if not HAVE_PIL:
             return
         p = self.v_in.get().strip()
         if not p or not Path(p).exists():
-            messagebox.showwarning("auvide", "Pick an input video on the Render tab first.")
             return
-        self.v_pstatus.set("Extracting frame…")
-        self.btn_loadframe.configure(state="disabled")
-        t = max(0.0, float(self.v_ptime.get()))
-        threading.Thread(target=self._extract_worker, args=(p, t), daemon=True).start()
+        if self._frame_after:
+            self.root.after_cancel(self._frame_after)
+        self._frame_after = self.root.after(180, self._kick_frame)
 
-    def _extract_worker(self, path, t):
+    def _kick_frame(self):
+        self._frame_after = None
+        self._fgen += 1
+        self.v_pstatus.set("Loading frame…")
+        threading.Thread(target=self._extract_worker,
+                         args=(self._fgen, self.v_in.get().strip(),
+                               max(0.0, float(self.v_ptime.get()))), daemon=True).start()
+
+    def _extract_worker(self, gen, path, t):
         src = PREVIEW_DIR / "src.png"
         try:
             subprocess.run([str(FFMPEG), "-y", "-ss", str(t), "-i", path, "-frames:v", "1",
                             str(src)], creationflags=NOWINDOW, capture_output=True, timeout=60)
-            img = Image.open(src).convert("RGB")
-            img.load()
-            self._loaded_key = (path, round(t, 2))
-            self.q.put(("sample", img))
+            img = Image.open(src).convert("RGB"); img.load()
+            self.q.put(("sample", gen, img))
         except Exception as e:
             self.q.put(("perror", f"could not extract frame: {e}"))
+
+    def _ab(self, show_original):
+        # defer turning OFF slightly so key auto-repeat (press/release spam)
+        # doesn't strobe the image
+        if not self._loaded:
+            return
+        if self._ab_off_after:
+            self.root.after_cancel(self._ab_off_after)
+            self._ab_off_after = None
+        if show_original:
+            if not self._show_orig:
+                self._show_orig = True
+                self._composite()
+        else:
+            self._ab_off_after = self.root.after(70, self._ab_off)
+
+    def _ab_off(self):
+        self._ab_off_after = None
+        if self._show_orig:
+            self._show_orig = False
+            self._composite()
 
     def _schedule_render(self):
         if not HAVE_PIL or self._orig is None:
@@ -546,19 +617,32 @@ class App:
         scale = min(self.PW / w, self.PH / h)
         return img.resize((max(1, int(w * scale)), max(1, int(h * scale))))
 
+    def _label(self, d, x0, x1, y, text):
+        d.rectangle([x0, y, x1, y + 20], fill=(0, 0, 0))
+        d.text((x0 + 6, y + 4), text, fill=(255, 255, 255))
+
     def _composite(self):
         if self._orig is None or self._graded is None:
             return
         a = self._fit(self._orig); b = self._fit(self._graded)
         w, h = a.size
-        div = max(0, min(w, self._divx))
-        combo = a.copy()
-        if div < w:
-            combo.paste(b.crop((div, 0, w, h)), (div, 0))
-        d = ImageDraw.Draw(combo)
-        d.line([(div, 0), (div, h)], fill=(255, 255, 255), width=2)
-        d.rectangle([6, 6, 78, 26], fill=(0, 0, 0)); d.text((12, 10), "BEFORE", fill=(255, 255, 255))
-        d.rectangle([w - 70, 6, w - 6, 26], fill=(0, 0, 0)); d.text((w - 64, 10), "AFTER", fill=(255, 255, 255))
+        if self._show_orig:                       # A/B: flash the full original
+            combo = a.copy()
+            d = ImageDraw.Draw(combo)
+            self._label(d, 6, 96, 6, "ORIGINAL")
+        else:
+            div = max(0, min(w, self._divx))
+            combo = a.copy()
+            if div < w:
+                combo.paste(b.crop((div, 0, w, h)), (div, 0))
+            d = ImageDraw.Draw(combo)
+            d.line([(div, 0), (div, h)], fill=(255, 255, 255), width=2)
+            cy = h // 2                            # grab handle on the divider
+            d.ellipse([div - 9, cy - 9, div + 9, cy + 9], fill=(255, 255, 255))
+            d.line([(div - 3, cy - 4), (div - 3, cy + 4)], fill=(30, 30, 30), width=1)
+            d.line([(div + 3, cy - 4), (div + 3, cy + 4)], fill=(30, 30, 30), width=1)
+            self._label(d, 6, 78, 6, "BEFORE")
+            self._label(d, w - 68, w - 6, 6, "AFTER")
         self._tkimg = ImageTk.PhotoImage(combo)
         self.canvas.delete("all")
         ox = (self.PW - w) // 2; oy = (self.PH - h) // 2
@@ -690,22 +774,23 @@ class App:
                         self.info = msg[1]
                         if msg[1]:
                             self._refresh_plan()
+                            self._on_media_ready()
                         elif self.v_in.get().strip():
                             self.v_plan.set("Could not read media info.")
                     elif kind == "exit":
                         self._on_exit(msg[1])
                     elif kind == "sample":
-                        self._orig = msg[1]
-                        self._divx = self.PW // 2
-                        self.btn_loadframe.configure(state="normal")
-                        self.v_pstatus.set("Frame loaded — drag to wipe, move sliders to grade.")
-                        self._schedule_render()
+                        if msg[1] == self._fgen:      # ignore stale scrubs
+                            self._orig = msg[2]
+                            self._loaded = True
+                            self.v_pstatus.set("Drag the image to wipe · Space = original · "
+                                               "double-click a slider to reset")
+                            self._schedule_render()
                     elif kind == "graded":
                         if msg[1] == self._pgen:
                             self._graded = msg[2]
                             self._composite()
                     elif kind == "perror":
-                        self.btn_loadframe.configure(state="normal")
                         self.v_pstatus.set(msg[1])
                     continue
                 low = "err" if "[error]" in msg else ("ok" if DONE_RE.search(msg) else None)

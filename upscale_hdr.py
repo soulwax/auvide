@@ -162,6 +162,27 @@ def build_vf(args, info) -> str:
     return ",".join(filters)
 
 
+def make_preview(args, src: Path, info: dict) -> None:
+    """Render before/after grade stills (source frame graded) and exit — no run."""
+    grade_vf = grade.build_chain(resolve_grade(args), out_format="rgb24", working="gbrpf32le")
+    dur = info["duration"]
+    if args.at:
+        times = [float(x) for x in args.at.split(",") if x.strip()]
+    else:
+        times = [round(dur * f, 1) for f in (0.2, 0.5, 0.8)] if dur else [5.0]
+    pdir = OUTPUT_DIR / "preview"
+    pdir.mkdir(parents=True, exist_ok=True)
+    # split -> grade one half -> stack side by side (left original, right graded)
+    vf = f"split=2[a][b];[a]format=rgb24[la];[b]{grade_vf}[lg];[la][lg]hstack=inputs=2"
+    print(f"[preview] {len(times)} before/after stills -> {pdir}")
+    for t in times:
+        out = pdir / f"{src.stem}_t{int(t)}s.png"
+        run([str(FFMPEG), "-y", "-ss", str(t), "-i", str(src), "-frames:v", "1",
+             "-vf", vf, str(out)])
+        print(f"  {out.name}")
+    print("[preview] done — left half = original, right half = graded")
+
+
 def encode_cmd(args, info, in_pattern: str, start_number: int, out_file: Path) -> list[str]:
     vf = build_vf(args, info)
     fps = f"{info['fps_num']}/{info['fps_den']}"
@@ -235,6 +256,9 @@ def main() -> None:
     grp.add_argument("--sharpen", type=float, help="unsharp amount, 0..1.5")
     grp.add_argument("--hdr-gain", type=float, default=1.5, dest="hdr_gain",
                      help="HDR highlight expansion")
+    grp.add_argument("--preview", action="store_true",
+                     help="render before/after grade stills (no full run) and exit")
+    grp.add_argument("--at", help="comma-separated seconds for --preview (default: 20/50/80%%)")
     ap.add_argument("--hdr", default="on", choices=["on", "off"],
                     help="remap to HDR10 (on) or stay SDR BT.709 (off)")
     ap.add_argument("--encoder", default="x265", choices=["x265", "qsv"],
@@ -294,6 +318,9 @@ def main() -> None:
     print(f"  output      {out}")
     print("=" * 60)
     if args.dry_run:
+        return
+    if args.preview:
+        make_preview(args, src, info)
         return
 
     # ---- phase 1: extract all frames -------------------------------------
