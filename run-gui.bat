@@ -7,5 +7,5 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-uv run --python 3.12 "%~dp0gui.py" %*
+uv run --python 3.12 --with pillow "%~dp0gui.py" %*
 if errorlevel 1 pause

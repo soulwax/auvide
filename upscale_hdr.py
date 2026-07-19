@@ -32,6 +32,8 @@ import tempfile
 import time
 from pathlib import Path
 
+import grade
+
 HERE = Path(__file__).resolve().parent
 BIN = HERE / "bin"
 FFMPEG = BIN / "ffmpeg.exe"
@@ -44,14 +46,6 @@ MODEL_MAP = {
     "animevideo": ("realesr-animevideov3", None),   # fast, denoises, great for video
     "x4plus": ("realesrgan-x4plus", 4),             # sharper photographic detail, 4x only
     "x4plus-anime": ("realesrgan-x4plus-anime", 4), # illustration / anime, 4x only
-}
-
-# vibrance preset -> (saturation, contrast, hdr_highlight_gain)
-VIBRANCE = {
-    "none":    (1.00, 1.00, 1.0),
-    "subtle":  (1.12, 1.02, 1.2),
-    "vibrant": (1.30, 1.05, 1.5),
-    "max":     (1.50, 1.10, 2.2),
 }
 
 # HDR10 mastering-display + content-light metadata (generic P3-ish, 1000-nit master)
@@ -110,8 +104,16 @@ def probe(src: Path) -> dict:
     }
 
 
+def resolve_grade(args) -> grade.Grade:
+    """Grade preset with any per-knob CLI overrides applied."""
+    return grade.from_overrides(
+        grade.PRESETS[args.vibrance],
+        saturation=args.saturation, vibrance=args.vibrance_amt,
+        contrast=args.contrast, gamma=args.gamma,
+        warmth=args.warmth, sharpen=args.sharpen)
+
+
 def build_vf(args, info) -> str:
-    sat, con, gain = VIBRANCE[args.vibrance]
     filters = []
 
     # if realesrgan over-scaled (x4plus at 4x) but a smaller target was asked,
@@ -120,16 +122,18 @@ def build_vf(args, info) -> str:
         tw, th = args.rescale_to
         filters.append(f"scale={tw}:{th}:flags=lanczos")
 
-    if args.vibrance != "none":
-        filters.append(f"eq=saturation={sat}:contrast={con}")
+    # shared best-practice grade, in float RGB; leave pixels in that space so
+    # the HDR tail (below) can pick up without a round-trip through 8-bit.
+    filters.append(grade.build_chain(resolve_grade(args), out_format=None,
+                                     working="gbrpf32le"))
 
     if args.hdr == "on":
-        # SDR BT.709 (full-range RGB PNGs) -> HDR10 PQ / BT.2020, 10-bit.
+        # graded BT.709 (float RGB) -> HDR10 PQ / BT.2020, 10-bit.
         filters += [
             "zscale=tin=bt709:min=bt709:pin=bt709:rin=pc:t=linear:npl=100",
             "format=gbrpf32le",
             "zscale=p=bt2020",
-            f"tonemap=tonemap=linear:desat=0:param={gain}",
+            f"tonemap=tonemap=linear:desat=0:param={args.hdr_gain}",
             "zscale=t=smpte2084:m=bt2020nc:p=bt2020:r=tv",
             "format=yuv420p10le",
         ]
@@ -196,8 +200,19 @@ def main() -> None:
     ap.add_argument("--scale", type=int, default=2, choices=[2, 3, 4], help="upscale factor")
     ap.add_argument("--model", default="animevideo", choices=list(MODEL_MAP),
                     help="Real-ESRGAN model (animevideo=fast/video, x4plus=sharp photo)")
-    ap.add_argument("--vibrance", default="vibrant", choices=list(VIBRANCE),
-                    help="color punch")
+    ap.add_argument("--vibrance", default="vibrant", choices=list(grade.PRESETS),
+                    help="grade preset (base for the --grade knobs below)")
+    # per-knob grade overrides (default None -> take the preset's value)
+    grp = ap.add_argument_group("grade overrides (leave unset to use the preset)")
+    grp.add_argument("--saturation", type=float, help="1.0 = unchanged")
+    grp.add_argument("--vibrance-amt", type=float, dest="vibrance_amt",
+                     help="selective saturation, 0..1")
+    grp.add_argument("--contrast", type=float, help="S-curve strength, 0..1")
+    grp.add_argument("--gamma", type=float, help="midtone lift, >1 brighter")
+    grp.add_argument("--warmth", type=float, help="-1 cool .. +1 warm")
+    grp.add_argument("--sharpen", type=float, help="unsharp amount, 0..1.5")
+    grp.add_argument("--hdr-gain", type=float, default=1.5, dest="hdr_gain",
+                     help="HDR highlight expansion")
     ap.add_argument("--hdr", default="on", choices=["on", "off"],
                     help="remap to HDR10 (on) or stay SDR BT.709 (off)")
     ap.add_argument("--encoder", default="x265", choices=["x265", "qsv"],

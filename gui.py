@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""auvide GUI - a desktop front-end over upscale_hdr.py.
+"""auvide GUI - desktop front-end over upscale_hdr.py with a live grade preview.
 
-The CLI stays the engine: this window collects options, launches
-`python upscale_hdr.py ...` as a subprocess, streams its output into a log,
-and turns the "chunk k/N" progress lines into a progress bar. It also probes
-the chosen file (via bundled ffprobe) to show source/target resolution and a
-rough time estimate.
+Two tabs:
+  * Render        - pick a file, set scale/model/HDR/encoder, Start; streams the
+                    CLI log and shows a progress bar.
+  * Grade & Preview - load one frame and dial in the color grade with sliders,
+                    seeing a real before/after (draggable wipe). The exact grade
+                    is shared with the render (via grade.py), so what you tune is
+                    what you get.
 
-Run:  uv run --python 3.12 gui.py       (or double-click run-gui.bat)
+The preview grades the SOURCE frame (color is resolution-independent), so slider
+drags are snappy — no per-change upscaling.
+
+Run:  uv run --python 3.12 --with pillow gui.py   (or double-click run-gui.bat)
 """
 from __future__ import annotations
 
@@ -24,29 +29,36 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
+import grade
+
+try:
+    from PIL import Image, ImageTk, ImageDraw
+    HAVE_PIL = True
+except Exception:
+    HAVE_PIL = False
+
 HERE = Path(__file__).resolve().parent
 CLI = HERE / "upscale_hdr.py"
+FFMPEG = HERE / "bin" / "ffmpeg.exe"
 FFPROBE = HERE / "bin" / "ffprobe.exe"
 CONFIG = Path(os.environ.get("LOCALAPPDATA", HERE)) / "auvide" / "gui.json"
+PREVIEW_DIR = Path(os.environ.get("TEMP", HERE)) / "auvide" / "preview"
 
 SCALES = ["2", "3", "4"]
 MODELS = ["animevideo", "x4plus", "x4plus-anime"]
-VIBRANCE = ["none", "subtle", "vibrant", "max"]
 HDR = ["on", "off"]
 ENCODERS = ["x265", "qsv"]
 VIDEO_TYPES = [("Video files", "*.mp4 *.mkv *.mov *.avi *.webm *.m4v"), ("All files", "*.*")]
 
-MODEL_HELP = {
-    "animevideo": "Fast, denoises — best for real video footage.",
-    "x4plus": "Sharper photographic detail. 4× native, slower, more VRAM.",
-    "x4plus-anime": "Tuned for illustration / anime line art.",
-}
-VIB_HELP = {
-    "none": "No color change — pure upscale + HDR container.",
-    "subtle": "Gentle lift, stays close to the original grade.",
-    "vibrant": "Balanced saturation + contrast punch (recommended).",
-    "max": "Aggressive saturation and highlight expansion.",
-}
+# grade slider specs: (key, label, min, max, tip)
+GRADE_SLIDERS = [
+    ("saturation", "Saturation", 0.5, 2.0, "Overall color intensity (1.0 = unchanged)."),
+    ("vibrance", "Vibrance", 0.0, 1.0, "Selective saturation — boosts muted colors, protects skin."),
+    ("contrast", "Contrast", 0.0, 1.0, "S-curve depth: deepens blacks, lifts highlights."),
+    ("gamma", "Midtones", 0.8, 1.3, "Lift/lower midtone brightness (>1 brighter)."),
+    ("warmth", "Warmth", -1.0, 1.0, "Cool (−) neutralizes a warm cast; warm (+) adds it."),
+    ("sharpen", "Sharpen", 0.0, 1.5, "Micro-contrast / edge sharpening."),
+]
 
 CHUNK_RE = re.compile(r"chunk\s+(\d+)/(\d+)")
 ETA_RE = re.compile(r"ETA\s+(\S+)")
@@ -54,21 +66,12 @@ FPS_RE = re.compile(r"([\d.]+)\s*fps")
 DONE_RE = re.compile(r"done\s+->")
 NOWINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
-# ---- palette (dark) -----------------------------------------------------
-BG = "#14151b"
-PANEL = "#1d1f28"
-FIELD = "#2a2d3a"
-LINE = "#33364a"
-TEXT = "#e7e8f0"
-MUTED = "#8b8fa6"
-ACCENT = "#6c8cff"
-ACCENT_HI = "#8aa2ff"
-OK = "#5ec98a"
-ERR = "#e06c75"
-FONT = ("Segoe UI", 10)
-FONT_SM = ("Segoe UI", 9)
-FONT_H = ("Segoe UI Semibold", 17)
-FONT_MONO = ("Consolas", 9)
+# palette
+BG = "#14151b"; PANEL = "#1d1f28"; FIELD = "#2a2d3a"; LINE = "#33364a"
+TEXT = "#e7e8f0"; MUTED = "#8b8fa6"; ACCENT = "#6c8cff"; ACCENT_HI = "#8aa2ff"
+OK = "#5ec98a"; ERR = "#e06c75"
+FONT = ("Segoe UI", 10); FONT_SM = ("Segoe UI", 9)
+FONT_H = ("Segoe UI Semibold", 17); FONT_MONO = ("Consolas", 9)
 
 
 def apply_theme(root: tk.Tk):
@@ -87,6 +90,11 @@ def apply_theme(root: tk.Tk):
     s.configure("Info.TLabel", background=FIELD, foreground=TEXT, font=FONT_SM)
     s.configure("OK.TLabel", background=PANEL, foreground=OK)
     s.configure("Err.TLabel", background=PANEL, foreground=ERR)
+    s.configure("Val.TLabel", background=PANEL, foreground=ACCENT_HI, font=FONT_SM, width=6)
+    s.configure("TNotebook", background=BG, bordercolor=LINE)
+    s.configure("TNotebook.Tab", background=PANEL, foreground=MUTED, padding=(16, 7),
+                bordercolor=LINE)
+    s.map("TNotebook.Tab", background=[("selected", FIELD)], foreground=[("selected", TEXT)])
     s.configure("TLabelframe", background=PANEL, bordercolor=LINE, relief="solid", borderwidth=1)
     s.configure("TLabelframe.Label", background=PANEL, foreground=ACCENT_HI, font=FONT_SM)
     s.configure("TButton", background=FIELD, foreground=TEXT, bordercolor=LINE,
@@ -113,7 +121,6 @@ def apply_theme(root: tk.Tk):
     s.configure("Accent.Horizontal.TProgressbar", background=ACCENT, troughcolor=FIELD,
                 bordercolor=LINE, lightcolor=ACCENT, darkcolor=ACCENT)
     s.configure("Horizontal.TScale", background=PANEL, troughcolor=FIELD)
-    # combobox dropdown list colors
     root.option_add("*TCombobox*Listbox.background", FIELD)
     root.option_add("*TCombobox*Listbox.foreground", TEXT)
     root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
@@ -146,17 +153,28 @@ class Tooltip:
 
 
 class App:
+    PW, PH = 900, 470  # preview canvas size
+
     def __init__(self, root: tk.Tk, self_test: bool = False):
         self.root = root
-        self.proc: subprocess.Popen | None = None
+        self.proc = None
         self.q: queue.Queue = queue.Queue()
         self.out_edited = False
-        self.info: dict | None = None
+        self.info = None
         self.start_ts = 0.0
         self.cancelling = False
+        # preview state
+        self._orig = None
+        self._graded = None
+        self._tkimg = None
+        self._divx = self.PW // 2
+        self._pgen = 0
+        self._render_after = None
+        self._loaded_key = None
         root.title("auvide  ·  AI upscale + vibrant HDR10")
-        root.minsize(760, 640)
+        root.minsize(940, 720)
         apply_theme(root)
+        PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
 
         self._build_vars()
         self._build_ui()
@@ -165,7 +183,6 @@ class App:
         self._tick_elapsed()
         root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._center()
-
         if self_test:
             root.after(300, root.destroy)
 
@@ -175,10 +192,10 @@ class App:
         self.v_out = tk.StringVar()
         self.v_scale = tk.StringVar(value="2")
         self.v_model = tk.StringVar(value="animevideo")
-        self.v_vib = tk.StringVar(value="vibrant")
         self.v_hdr = tk.StringVar(value="on")
         self.v_enc = tk.StringVar(value="x265")
         self.v_crf = tk.IntVar(value=19)
+        self.v_hdrgain = tk.DoubleVar(value=1.5)
         self.v_chunk = tk.IntVar(value=300)
         self.v_gpu = tk.IntVar(value=0)
         self.v_tile = tk.IntVar(value=0)
@@ -187,35 +204,48 @@ class App:
         self.v_status = tk.StringVar(value="Ready — choose a video to begin.")
         self.v_elapsed = tk.StringVar(value="")
         self.v_plan = tk.StringVar(value="No file selected.")
-        self.v_modelhelp = tk.StringVar(value=MODEL_HELP["animevideo"])
-        self.v_vibhelp = tk.StringVar(value=VIB_HELP["vibrant"])
-        self.v_crflabel = tk.StringVar(value="19")
+        self.v_ptime = tk.DoubleVar(value=5.0)
+        self.v_pstatus = tk.StringVar(value="Load a frame to preview the grade.")
+        # grade vars from the 'vibrant' preset
+        base = grade.PRESETS["vibrant"]
+        self.g_vars = {k: tk.DoubleVar(value=getattr(base, k))
+                       for k, *_ in GRADE_SLIDERS}
+        self.g_labels = {k: tk.StringVar(value=self._fmt(getattr(base, k)))
+                         for k, *_ in GRADE_SLIDERS}
+        for k, var in self.g_vars.items():
+            var.trace_add("write", lambda *_a, kk=k: self._on_grade_change(kk))
         self.v_in.trace_add("write", lambda *_: (self._suggest_output(), self._on_input_change()))
         self.v_scale.trace_add("write", lambda *_: (self._suggest_output(), self._refresh_plan()))
         self.v_hdr.trace_add("write", lambda *_: self._suggest_output())
-        self.v_model.trace_add("write", lambda *_: (
-            self.v_modelhelp.set(MODEL_HELP[self.v_model.get()]), self._refresh_plan()))
-        self.v_vib.trace_add("write", lambda *_: self.v_vibhelp.set(VIB_HELP[self.v_vib.get()]))
-        self.v_crf.trace_add("write", lambda *_: self.v_crflabel.set(str(self.v_crf.get())))
+        self.v_model.trace_add("write", lambda *_: self._refresh_plan())
+
+    @staticmethod
+    def _fmt(v):
+        return f"{v:+.2f}" if v < 0 else f"{v:.2f}"
 
     # ---- layout ---------------------------------------------------------
     def _build_ui(self):
-        root = self.root
-        # header
-        head = ttk.Frame(root, style="Bg.TFrame", padding=(18, 14, 18, 6))
+        head = ttk.Frame(self.root, style="Bg.TFrame", padding=(18, 12, 18, 6))
         head.pack(fill="x")
         ttk.Label(head, text="auvide", style="Head.TLabel").pack(side="left")
         ttk.Label(head, text="AI upscale  →  vibrant HDR10", style="MutedBg.TLabel").pack(
             side="left", padx=12, pady=(8, 0))
 
-        body = ttk.Frame(root, padding=(16, 8, 16, 12))
-        body.pack(fill="both", expand=True)
+        nb = ttk.Notebook(self.root)
+        nb.pack(fill="both", expand=True, padx=12, pady=(4, 10))
+        self.tab_render = ttk.Frame(nb, padding=12)
+        self.tab_prev = ttk.Frame(nb, padding=12)
+        nb.add(self.tab_render, text="  Render  ")
+        nb.add(self.tab_prev, text="  Grade & Preview  ")
+        self._build_render_tab(self.tab_render)
+        self._build_preview_tab(self.tab_prev)
+
+    def _build_render_tab(self, body):
         body.columnconfigure(0, weight=1)
         pad = dict(padx=6, pady=5)
 
-        # --- file row ---
         files = ttk.Frame(body)
-        files.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        files.grid(row=0, column=0, sticky="ew")
         files.columnconfigure(1, weight=1)
         ttk.Label(files, text="Input").grid(row=0, column=0, sticky="w", **pad)
         ttk.Entry(files, textvariable=self.v_in).grid(row=0, column=1, sticky="ew", **pad)
@@ -226,31 +256,13 @@ class App:
         e_out.bind("<Key>", lambda *_: setattr(self, "out_edited", True))
         ttk.Button(files, text="Browse…", command=self._browse_out).grid(row=1, column=2, **pad)
 
-        # --- media info strip ---
-        info = ttk.Frame(body, style="TFrame")
-        info.grid(row=1, column=0, sticky="ew", pady=(2, 8))
-        strip = tk.Frame(info, background=FIELD, highlightbackground=LINE, highlightthickness=1)
-        strip.pack(fill="x")
+        strip = tk.Frame(body, background=FIELD, highlightbackground=LINE, highlightthickness=1)
+        strip.grid(row=1, column=0, sticky="ew", pady=(4, 8))
         ttk.Label(strip, textvariable=self.v_plan, style="Info.TLabel",
                   background=FIELD, padding=(10, 7)).pack(side="left")
 
-        # --- presets ---
-        pre = ttk.Frame(body)
-        pre.grid(row=2, column=0, sticky="w", pady=(0, 4))
-        ttk.Label(pre, text="Presets", style="Muted.TLabel").pack(side="left", padx=(6, 8))
-        for name, cfg in (
-            ("Vibrant 2× HDR", dict(scale="2", model="animevideo", vib="vibrant", hdr="on")),
-            ("Cinematic", dict(scale="2", model="animevideo", vib="subtle", hdr="on")),
-            ("Max punch", dict(scale="2", model="animevideo", vib="max", hdr="on")),
-            ("Sharp photo 2×", dict(scale="2", model="x4plus", vib="vibrant", hdr="on")),
-            ("SDR upscale", dict(scale="2", model="animevideo", vib="subtle", hdr="off")),
-        ):
-            ttk.Button(pre, text=name, style="Chip.TButton",
-                       command=lambda c=cfg: self._apply_preset(c)).pack(side="left", padx=3)
-
-        # --- options ---
-        opt = ttk.LabelFrame(body, text="Options", padding=(10, 6))
-        opt.grid(row=3, column=0, sticky="ew", pady=4)
+        opt = ttk.LabelFrame(body, text="Render options", padding=(10, 6))
+        opt.grid(row=2, column=0, sticky="ew", pady=4)
         for c in (1, 3):
             opt.columnconfigure(c, weight=1)
 
@@ -260,49 +272,39 @@ class App:
             cb.grid(row=r, column=c * 2 + 1, sticky="ew", padx=6, pady=5)
             if tip:
                 Tooltip(cb, tip)
-            return cb
 
         combo(0, 0, "Scale", self.v_scale, SCALES, "Upscale factor (2× recommended).")
-        combo(0, 1, "Model", self.v_model, MODELS)
-        ttk.Label(opt, textvariable=self.v_modelhelp, style="Muted.TLabel").grid(
-            row=1, column=0, columnspan=4, sticky="w", padx=6)
-        combo(2, 0, "Vibrance", self.v_vib, VIBRANCE)
-        combo(2, 1, "HDR", self.v_hdr, HDR, "HDR10 remap (on) or stay SDR BT.709 (off).")
-        ttk.Label(opt, textvariable=self.v_vibhelp, style="Muted.TLabel").grid(
-            row=3, column=0, columnspan=4, sticky="w", padx=6)
-
-        combo(4, 0, "Encoder", self.v_enc, ENCODERS,
-              "x265 = software (best HDR fidelity). qsv = Intel GPU (faster).")
-        # CRF slider
-        ttk.Label(opt, text="Quality (CRF)").grid(row=4, column=2, sticky="w", padx=6, pady=5)
-        crf = ttk.Frame(opt)
-        crf.grid(row=4, column=3, sticky="ew", padx=6, pady=5)
-        crf.columnconfigure(0, weight=1)
-        ttk.Scale(crf, from_=12, to=30, orient="horizontal", variable=self.v_crf,
+        combo(0, 1, "Model", self.v_model, MODELS, "animevideo=fast/video, x4plus=sharp photo.")
+        combo(1, 0, "HDR", self.v_hdr, HDR, "HDR10 remap (on) or SDR BT.709 (off).")
+        combo(1, 1, "Encoder", self.v_enc, ENCODERS, "x265=software; qsv=Intel GPU (faster).")
+        ttk.Label(opt, text="Quality (CRF)").grid(row=2, column=0, sticky="w", padx=6, pady=5)
+        cf = ttk.Frame(opt); cf.grid(row=2, column=1, sticky="ew", padx=6, pady=5)
+        cf.columnconfigure(0, weight=1)
+        self.v_crflabel = tk.StringVar(value="19")
+        self.v_crf.trace_add("write", lambda *_: self.v_crflabel.set(str(self.v_crf.get())))
+        ttk.Scale(cf, from_=12, to=30, orient="horizontal", variable=self.v_crf,
                   command=lambda v: self.v_crf.set(round(float(v)))).grid(row=0, column=0, sticky="ew")
-        ttk.Label(crf, textvariable=self.v_crflabel, style="Muted.TLabel", width=3).grid(
-            row=0, column=1, padx=(6, 0))
+        ttk.Label(cf, textvariable=self.v_crflabel, style="Val.TLabel").grid(row=0, column=1)
+        ttk.Label(opt, text="HDR punch").grid(row=2, column=2, sticky="w", padx=6, pady=5)
+        ttk.Spinbox(opt, from_=1.0, to=3.0, increment=0.1, textvariable=self.v_hdrgain,
+                    width=6).grid(row=2, column=3, sticky="w", padx=6, pady=5)
 
-        # numeric row
         num = ttk.Frame(opt)
-        num.grid(row=5, column=0, columnspan=4, sticky="ew", pady=(6, 2))
+        num.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(6, 2))
         def spin(label, var, lo, hi, step=1, tip=""):
-            f = ttk.Frame(num)
-            f.pack(side="left", padx=(6, 14))
+            f = ttk.Frame(num); f.pack(side="left", padx=(6, 14))
             ttk.Label(f, text=label, style="Muted.TLabel").pack(side="left", padx=(0, 5))
             sp = ttk.Spinbox(f, from_=lo, to=hi, increment=step, textvariable=var, width=6)
             sp.pack(side="left")
             if tip:
                 Tooltip(sp, tip)
-        spin("Chunk", self.v_chunk, 30, 4000, 30, "Frames per encode chunk. Bounds disk use.")
+        spin("Chunk", self.v_chunk, 30, 4000, 30, "Frames per encode chunk.")
         spin("GPU id", self.v_gpu, -1, 8, 1, "Real-ESRGAN GPU (-1 = CPU).")
-        spin("Tile", self.v_tile, 0, 1024, 32, "0 = auto. Lower it if you hit VRAM OOM.")
+        spin("Tile", self.v_tile, 0, 1024, 32, "0 = auto; lower on VRAM OOM.")
         ttk.Checkbutton(num, text="Resume", variable=self.v_resume).pack(side="left", padx=8)
         ttk.Checkbutton(num, text="Keep scratch", variable=self.v_keep).pack(side="left", padx=8)
 
-        # --- actions ---
-        bar = ttk.Frame(body)
-        bar.grid(row=4, column=0, sticky="ew", pady=(8, 4))
+        bar = ttk.Frame(body); bar.grid(row=3, column=0, sticky="ew", pady=(8, 4))
         self.btn_start = ttk.Button(bar, text="▶  Start", style="Accent.TButton", command=self._start)
         self.btn_start.pack(side="left")
         self.btn_cancel = ttk.Button(bar, text="Cancel", command=self._cancel, state="disabled")
@@ -312,18 +314,16 @@ class App:
         self.btn_open.pack(side="left", padx=6)
         ttk.Label(bar, textvariable=self.v_elapsed, style="Muted.TLabel").pack(side="right", padx=6)
 
-        # --- progress + status ---
         self.pbar = ttk.Progressbar(body, mode="determinate", maximum=100,
                                     style="Accent.Horizontal.TProgressbar")
-        self.pbar.grid(row=5, column=0, sticky="ew", pady=(4, 3))
+        self.pbar.grid(row=4, column=0, sticky="ew", pady=(4, 3))
         self.lbl_status = ttk.Label(body, textvariable=self.v_status, style="Muted.TLabel")
-        self.lbl_status.grid(row=6, column=0, sticky="w", padx=6)
+        self.lbl_status.grid(row=5, column=0, sticky="w", padx=6)
 
-        # --- log ---
         logf = ttk.LabelFrame(body, text="Log", padding=4)
-        logf.grid(row=7, column=0, sticky="nsew", pady=(6, 0))
-        body.rowconfigure(7, weight=1)
-        self.log = tk.Text(logf, height=11, wrap="none", state="disabled", font=FONT_MONO,
+        logf.grid(row=6, column=0, sticky="nsew", pady=(6, 0))
+        body.rowconfigure(6, weight=1)
+        self.log = tk.Text(logf, height=9, wrap="none", state="disabled", font=FONT_MONO,
                            background="#0e0f14", foreground="#c8ccd8", insertbackground=TEXT,
                            relief="flat", borderwidth=0, highlightthickness=0)
         self.log.pack(side="left", fill="both", expand=True)
@@ -334,19 +334,77 @@ class App:
         self.log.tag_configure("ok", foreground=OK)
         self.log.tag_configure("cmd", foreground=MUTED)
 
+    def _build_preview_tab(self, body):
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+
+        top = ttk.Frame(body); top.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        ttk.Label(top, text="Frame at").pack(side="left", padx=(4, 4))
+        ttk.Spinbox(top, from_=0, to=100000, increment=1, textvariable=self.v_ptime,
+                    width=7).pack(side="left")
+        ttk.Label(top, text="s", style="Muted.TLabel").pack(side="left", padx=(2, 8))
+        self.btn_loadframe = ttk.Button(top, text="Load frame", style="Accent.TButton",
+                                        command=self._load_sample)
+        self.btn_loadframe.pack(side="left")
+        ttk.Label(top, textvariable=self.v_pstatus, style="Muted.TLabel").pack(side="left", padx=12)
+
+        # preview canvas
+        if HAVE_PIL:
+            self.canvas = tk.Canvas(body, width=self.PW, height=self.PH, background="#0e0f14",
+                                    highlightthickness=1, highlightbackground=LINE)
+            self.canvas.grid(row=1, column=0, sticky="n", pady=2)
+            self.canvas.bind("<Button-1>", self._wipe)
+            self.canvas.bind("<B1-Motion>", self._wipe)
+            self.canvas.create_text(self.PW // 2, self.PH // 2, fill=MUTED, font=FONT,
+                                    text="Load a frame to see BEFORE | AFTER — drag to wipe.",
+                                    tags="hint")
+        else:
+            self.canvas = None
+            warn = ttk.Frame(body, style="TFrame", padding=20)
+            warn.grid(row=1, column=0, sticky="n")
+            ttk.Label(warn, text="Live preview needs Pillow.\n\nInstall it, then relaunch:\n"
+                      "    uv run --python 3.12 --with pillow gui.py",
+                      style="Muted.TLabel", justify="left").pack()
+
+        # grade sliders
+        gf = ttk.LabelFrame(body, text="Grade", padding=(12, 8))
+        gf.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        gf.columnconfigure(1, weight=1)
+        for i, (key, label, lo, hi, tip) in enumerate(GRADE_SLIDERS):
+            ttk.Label(gf, text=label).grid(row=i, column=0, sticky="w", padx=(4, 10), pady=3)
+            sc = ttk.Scale(gf, from_=lo, to=hi, orient="horizontal", variable=self.g_vars[key])
+            sc.grid(row=i, column=1, sticky="ew", pady=3)
+            Tooltip(sc, tip)
+            ttk.Label(gf, textvariable=self.g_labels[key], style="Val.TLabel").grid(
+                row=i, column=2, padx=(10, 4))
+
+        chips = ttk.Frame(body); chips.grid(row=3, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(chips, text="Presets", style="Muted.TLabel").pack(side="left", padx=(4, 8))
+        for name in grade.PRESETS:
+            ttk.Button(chips, text=name.capitalize(), style="Chip.TButton",
+                       command=lambda n=name: self._apply_grade_preset(n)).pack(side="left", padx=3)
+        ttk.Button(chips, text="Reset", style="Chip.TButton",
+                   command=lambda: self._apply_grade_preset("vibrant")).pack(side="left", padx=(12, 3))
+
     # ---- helpers --------------------------------------------------------
     def _center(self):
         self.root.update_idletasks()
         w, h = self.root.winfo_width(), self.root.winfo_height()
         x = (self.root.winfo_screenwidth() - w) // 2
-        y = max(0, (self.root.winfo_screenheight() - h) // 3)
+        y = max(0, (self.root.winfo_screenheight() - h) // 4)
         self.root.geometry(f"+{x}+{y}")
 
-    def _apply_preset(self, c):
-        self.v_scale.set(c["scale"])
-        self.v_model.set(c["model"])
-        self.v_vib.set(c["vib"])
-        self.v_hdr.set(c["hdr"])
+    def _current_grade(self) -> grade.Grade:
+        return grade.Grade(**{k: self.g_vars[k].get() for k, *_ in GRADE_SLIDERS})
+
+    def _apply_grade_preset(self, name):
+        g = grade.PRESETS[name]
+        for k, *_ in GRADE_SLIDERS:
+            self.g_vars[k].set(getattr(g, k))
+
+    def _on_grade_change(self, key):
+        self.g_labels[key].set(self._fmt(self.g_vars[key].get()))
+        self._schedule_render()
 
     def _suggest_output(self):
         if self.out_edited:
@@ -384,14 +442,12 @@ class App:
         try:
             out = subprocess.run(
                 [str(FFPROBE), "-v", "error", "-select_streams", "v:0", "-show_entries",
-                 "stream=width,height,r_frame_rate,nb_frames,duration",
-                 "-of", "json", path],
+                 "stream=width,height,r_frame_rate,nb_frames,duration", "-of", "json", path],
                 capture_output=True, text=True, creationflags=NOWINDOW, timeout=30)
             st = json.loads(out.stdout)["streams"][0]
             num, den = (st.get("r_frame_rate", "24/1").split("/") + ["1"])[:2]
             fps = int(num) / max(1, int(den or 1))
-            nb = st.get("nb_frames")
-            dur = float(st.get("duration") or 0)
+            nb = st.get("nb_frames"); dur = float(st.get("duration") or 0)
             frames = int(nb) if (nb and nb.isdigit()) else int(dur * fps)
             self.q.put(("info", dict(w=int(st["width"]), h=int(st["height"]),
                                      fps=fps, frames=frames, dur=dur)))
@@ -404,28 +460,117 @@ class App:
             return
         w, h, fps, frames, dur = (self.info[k] for k in ("w", "h", "fps", "frames", "dur"))
         scale = int(self.v_scale.get())
-        tw, th = w * scale, h * scale
         model = self.v_model.get()
         per = 5.6 if model != "animevideo" else 1.4 * (scale / 2) ** 2
-        est = frames * per
         mm, ss = divmod(int(dur), 60)
         self.v_plan.set(
             f"Source {w}×{h} · {fps:.2f} fps · {mm}:{ss:02d} · {frames} frames"
-            f"     →     Target {tw}×{th} · ~{self._hms(est)} to render")
+            f"     →     Target {w*scale}×{h*scale} · ~{self._hms(frames*per)} to render")
+        if self.v_ptime.get() == 5.0 and dur > 10:
+            self.v_ptime.set(round(dur / 2))
 
     @staticmethod
     def _hms(sec):
-        sec = int(sec)
-        h, r = divmod(sec, 3600)
-        m, s = divmod(r, 60)
+        sec = int(sec); h, r = divmod(sec, 3600); m, s = divmod(r, 60)
         return f"{h}h{m:02d}m" if h else f"{m}m{s:02d}s"
 
+    # ---- preview --------------------------------------------------------
+    def _load_sample(self):
+        if not HAVE_PIL:
+            return
+        p = self.v_in.get().strip()
+        if not p or not Path(p).exists():
+            messagebox.showwarning("auvide", "Pick an input video on the Render tab first.")
+            return
+        self.v_pstatus.set("Extracting frame…")
+        self.btn_loadframe.configure(state="disabled")
+        t = max(0.0, float(self.v_ptime.get()))
+        threading.Thread(target=self._extract_worker, args=(p, t), daemon=True).start()
+
+    def _extract_worker(self, path, t):
+        src = PREVIEW_DIR / "src.png"
+        try:
+            subprocess.run([str(FFMPEG), "-y", "-ss", str(t), "-i", path, "-frames:v", "1",
+                            str(src)], creationflags=NOWINDOW, capture_output=True, timeout=60)
+            img = Image.open(src).convert("RGB")
+            img.load()
+            self._loaded_key = (path, round(t, 2))
+            self.q.put(("sample", img))
+        except Exception as e:
+            self.q.put(("perror", f"could not extract frame: {e}"))
+
+    def _schedule_render(self):
+        if not HAVE_PIL or self._orig is None:
+            return
+        if self._render_after:
+            self.root.after_cancel(self._render_after)
+        self._render_after = self.root.after(160, self._kick_render)
+
+    def _kick_render(self):
+        self._render_after = None
+        self._pgen += 1
+        gen = self._pgen
+        g = self._current_grade()
+        threading.Thread(target=self._grade_worker, args=(gen, g), daemon=True).start()
+
+    def _grade_worker(self, gen, g):
+        src = PREVIEW_DIR / "src.png"
+        out = PREVIEW_DIR / f"g{gen % 3}.png"
+        vf = grade.build_chain(g, out_format="rgb24", working="gbrpf32le")
+        try:
+            r = subprocess.run([str(FFMPEG), "-y", "-i", str(src), "-vf", vf, str(out)],
+                               creationflags=NOWINDOW, capture_output=True, text=True, timeout=60)
+            if r.returncode != 0:
+                self.q.put(("perror", f"grade render failed: {r.stderr[-300:]}"))
+                return
+            img = Image.open(out).convert("RGB"); img.load()
+            self.q.put(("graded", gen, img))
+        except Exception as e:
+            self.q.put(("perror", f"grade render error: {e}"))
+
+    def _fit(self, img):
+        w, h = img.size
+        scale = min(self.PW / w, self.PH / h)
+        return img.resize((max(1, int(w * scale)), max(1, int(h * scale))))
+
+    def _composite(self):
+        if self._orig is None or self._graded is None:
+            return
+        a = self._fit(self._orig); b = self._fit(self._graded)
+        w, h = a.size
+        div = max(0, min(w, self._divx))
+        combo = a.copy()
+        if div < w:
+            combo.paste(b.crop((div, 0, w, h)), (div, 0))
+        d = ImageDraw.Draw(combo)
+        d.line([(div, 0), (div, h)], fill=(255, 255, 255), width=2)
+        d.rectangle([6, 6, 78, 26], fill=(0, 0, 0)); d.text((12, 10), "BEFORE", fill=(255, 255, 255))
+        d.rectangle([w - 70, 6, w - 6, 26], fill=(0, 0, 0)); d.text((w - 64, 10), "AFTER", fill=(255, 255, 255))
+        self._tkimg = ImageTk.PhotoImage(combo)
+        self.canvas.delete("all")
+        ox = (self.PW - w) // 2; oy = (self.PH - h) // 2
+        self._img_off = (ox, oy, w)
+        self.canvas.create_image(ox, oy, anchor="nw", image=self._tkimg)
+
+    def _wipe(self, event):
+        if not hasattr(self, "_img_off"):
+            return
+        ox, oy, w = self._img_off
+        self._divx = max(0, min(w, event.x - ox))
+        self._composite()
+
+    # ---- command / run --------------------------------------------------
     def _build_command(self):
+        g = self._current_grade()
         cmd = [sys.executable, "-u", str(CLI), self.v_in.get(), "-o", self.v_out.get(),
                "--scale", self.v_scale.get(), "--model", self.v_model.get(),
-               "--vibrance", self.v_vib.get(), "--hdr", self.v_hdr.get(),
-               "--encoder", self.v_enc.get(), "--crf", str(self.v_crf.get()),
-               "--chunk", str(self.v_chunk.get()), "--gpu", str(self.v_gpu.get())]
+               "--hdr", self.v_hdr.get(), "--encoder", self.v_enc.get(),
+               "--crf", str(self.v_crf.get()), "--chunk", str(self.v_chunk.get()),
+               "--gpu", str(self.v_gpu.get()),
+               "--saturation", f"{g.saturation:.3f}", "--vibrance-amt", f"{g.vibrance:.3f}",
+               "--contrast", f"{g.contrast:.3f}", "--gamma", f"{g.gamma:.3f}",
+               "--warmth", f"{g.warmth:.3f}", "--sharpen", f"{g.sharpen:.3f}",
+               "--hdr-gain", f"{self.v_hdrgain.get():.2f}"]
         if self.v_tile.get() > 0:
             cmd += ["--tile", str(self.v_tile.get())]
         if self.v_resume.get():
@@ -449,9 +594,9 @@ class App:
 
     def _set_status(self, text, kind="muted"):
         self.v_status.set(text)
-        self.lbl_status.configure(style={"ok": "OK.TLabel", "err": "Err.TLabel"}.get(kind, "Muted.TLabel"))
+        self.lbl_status.configure(
+            style={"ok": "OK.TLabel", "err": "Err.TLabel"}.get(kind, "Muted.TLabel"))
 
-    # ---- run / cancel ---------------------------------------------------
     def _start(self):
         if self.proc is not None:
             return
@@ -527,30 +672,39 @@ class App:
             while True:
                 msg = self.q.get_nowait()
                 if isinstance(msg, tuple):
-                    kind, payload = msg
+                    kind = msg[0]
                     if kind == "info":
-                        self.info = payload
-                        if payload:
+                        self.info = msg[1]
+                        if msg[1]:
                             self._refresh_plan()
                         elif self.v_in.get().strip():
                             self.v_plan.set("Could not read media info.")
                     elif kind == "exit":
-                        self._on_exit(payload)
+                        self._on_exit(msg[1])
+                    elif kind == "sample":
+                        self._orig = msg[1]
+                        self._divx = self.PW // 2
+                        self.btn_loadframe.configure(state="normal")
+                        self.v_pstatus.set("Frame loaded — drag to wipe, move sliders to grade.")
+                        self._schedule_render()
+                    elif kind == "graded":
+                        if msg[1] == self._pgen:
+                            self._graded = msg[2]
+                            self._composite()
+                    elif kind == "perror":
+                        self.btn_loadframe.configure(state="normal")
+                        self.v_pstatus.set(msg[1])
                     continue
-                # log line
-                low_tag = "err" if "[error]" in msg else ("ok" if DONE_RE.search(msg) else None)
-                self._append(msg, low_tag)
+                low = "err" if "[error]" in msg else ("ok" if DONE_RE.search(msg) else None)
+                self._append(msg, low)
                 m = CHUNK_RE.search(msg)
                 if m:
                     k, n = int(m.group(1)), int(m.group(2))
                     self.pbar.configure(value=max(1, round(k / n * 100)))
-                    eta = ETA_RE.search(msg)
-                    fps = FPS_RE.search(msg)
+                    eta = ETA_RE.search(msg); fps = FPS_RE.search(msg)
                     extra = []
-                    if fps:
-                        extra.append(f"{fps.group(1)} fps")
-                    if eta:
-                        extra.append(f"ETA {eta.group(1)}")
+                    if fps: extra.append(f"{fps.group(1)} fps")
+                    if eta: extra.append(f"ETA {eta.group(1)}")
                     tail = ("  ·  " + "  ·  ".join(extra)) if extra else ""
                     self._set_status(f"Upscaling + encoding — chunk {k}/{n}{tail}")
                 elif "[1/3]" in msg:
@@ -575,6 +729,14 @@ class App:
         self._reset_buttons()
 
     # ---- config ---------------------------------------------------------
+    def _cfg_map(self):
+        m = dict(scale=self.v_scale, model=self.v_model, hdr=self.v_hdr, encoder=self.v_enc,
+                 crf=self.v_crf, hdrgain=self.v_hdrgain, chunk=self.v_chunk, gpu=self.v_gpu,
+                 tile=self.v_tile, resume=self.v_resume, keep=self.v_keep)
+        for k, *_ in GRADE_SLIDERS:
+            m[f"g_{k}"] = self.g_vars[k]
+        return m
+
     def _load_config(self):
         try:
             d = json.loads(CONFIG.read_text())
@@ -590,11 +752,6 @@ class App:
             CONFIG.write_text(json.dumps({k: v.get() for k, v in self._cfg_map().items()}, indent=2))
         except Exception:
             pass
-
-    def _cfg_map(self):
-        return dict(scale=self.v_scale, model=self.v_model, vibrance=self.v_vib, hdr=self.v_hdr,
-                    encoder=self.v_enc, crf=self.v_crf, chunk=self.v_chunk, gpu=self.v_gpu,
-                    tile=self.v_tile, resume=self.v_resume, keep=self.v_keep)
 
     def _on_close(self):
         if self.proc and self.proc.poll() is None:
@@ -615,7 +772,7 @@ def main():
     App(root, self_test=self_test)
     root.mainloop()
     if self_test:
-        print("self-test OK: GUI constructed and destroyed cleanly")
+        print(f"self-test OK (Pillow={'yes' if HAVE_PIL else 'no'})")
 
 
 if __name__ == "__main__":

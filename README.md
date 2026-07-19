@@ -21,12 +21,17 @@ Requires **Python 3.8+** and a Vulkan-capable GPU (any modern integrated or
 discrete GPU works).
 
 ```powershell
-# one-time: download ffmpeg, ffprobe, realesrgan + models into ./bin
+# 1. download ffmpeg, ffprobe, realesrgan + models into ./bin
 powershell -ExecutionPolicy Bypass -File .\setup.ps1
+
+# 2. Python deps (for the GUI's live grade preview)
+pip install -r requirements.txt          # or: uv pip install -r requirements.txt
 ```
 
 The heavy binaries in `bin/` are **not** committed (ffmpeg alone exceeds
-GitHub's 100 MB file limit) — `setup.ps1` fetches them.
+GitHub's 100 MB file limit) — `setup.ps1` fetches them. The only Python
+dependency is Pillow (live preview); everything else is stdlib. `pyproject.toml`
+also exposes `auvide` / `auvide-gui` console scripts if you `pip install .`.
 
 ---
 
@@ -58,14 +63,20 @@ launches the same `upscale_hdr.py` engine as a subprocess, streams its log, and
 shows a progress bar driven by the CLI's per-chunk output.
 
 ```powershell
-# uv provides Python + tkinter (no system Python needed)
-uv run --python 3.12 gui.py
+# uv provides Python + tkinter + pillow (no system Python needed)
+uv run --python 3.12 --with pillow gui.py
 ```
 
-Or double-click **`run-gui.bat`**. Pick an input video, tweak the dropdowns
-(scale / model / vibrance / HDR / encoder), and hit **Start**. "Show command"
-prints the equivalent CLI invocation; **Cancel** stops the run (re-launch with
-Resume ticked to continue where it left off).
+Or double-click **`run-gui.bat`**. Two tabs:
+
+- **Render** — pick an input, set scale / model / HDR / encoder, hit **Start**.
+  "Show command" prints the equivalent CLI; **Cancel** stops the run (re-launch
+  with Resume ticked to continue).
+- **Grade & Preview** — **Load frame**, then dial the grade with live sliders
+  (saturation, vibrance, contrast, midtones, warmth, sharpen) and watch a real
+  **before/after** on that frame — drag anywhere on the image to move the wipe
+  divider. The grade you tune here is exactly what the render applies (both use
+  `grade.py`), so you never wait for a full run to judge the look.
 
 ### Options
 
@@ -73,10 +84,18 @@ Resume ticked to continue where it left off).
 |------|---------|---------|
 | `--scale {2,3,4}` | `2` | upscale factor |
 | `--model {animevideo,x4plus,x4plus-anime}` | `animevideo` | `animevideo` = fast, denoises, best for real video; `x4plus` = sharper photographic detail |
-| `--vibrance {none,subtle,vibrant,max}` | `vibrant` | color/saturation punch |
+| `--vibrance {none,subtle,vibrant,max}` | `vibrant` | grade **preset** — the base for the knobs below |
 | `--hdr {on,off}` | `on` | HDR10 remap, or stay SDR BT.709 |
 | `--encoder {x265,qsv}` | `x265` | `x265` = software (best HDR fidelity); `qsv` = Intel Quick Sync GPU (faster) |
 | `--crf N` | `19` | quality, lower = better (18–23 typical) |
+| **grade overrides** | *(preset)* | fine-tune the look; leave unset to use the preset |
+| `--saturation F` | | `1.0` = unchanged |
+| `--vibrance-amt F` | | selective saturation, `0..1` (protects skin) |
+| `--contrast F` | | S-curve strength, `0..1` |
+| `--gamma F` | | midtone lift, `>1` brighter |
+| `--warmth F` | | `-1` cool … `+1` warm (negative neutralizes a warm cast) |
+| `--sharpen F` | | unsharp amount, `0..1.5` |
+| `--hdr-gain F` | `1.5` | HDR highlight expansion (HDR mode only) |
 | `--chunk N` | `300` | frames per encode chunk (bounds disk use) |
 | `--gpu N` | `0` | Real-ESRGAN GPU id (`-1` = CPU) |
 | `--tile N` | `0` | tile size (0 = auto); lower it if you hit VRAM OOM |
@@ -106,6 +125,7 @@ The `x4plus` model is sharper but slower and needs more VRAM.
 ## Roadmap
 
 - ✅ **GUI front-end** — `gui.py`, a Tkinter window over the CLI (see above).
+- ✅ **Live grade preview** — before/after wipe + sliders, shared with the render.
 - **Drag-and-drop** onto the GUI window (needs the optional `tkinterdnd2` package).
 - **Standalone `.exe`** — package GUI + `bin/` with PyInstaller for double-click use.
 - **QSV HDR validation** — confirm/tune the `--encoder qsv` HDR10 metadata path.
