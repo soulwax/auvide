@@ -35,8 +35,9 @@ class Recipe:
     trim_start: float = 0.0
     trim_dur: float = 0.0              # 0 = to end
     audio: bool = True
-    # --- reserved for the stage engine (declared now, executed next) ---
-    frame_ops: list = field(default_factory=list)   # e.g. [{"op": "interpolate", "factor": 2}]
+    interpolate: int = 0              # RIFE factor (0=off, 2/3/4)
+    slowmo: bool = False              # keep fps (slow-motion) vs smoother
+    # --- reserved for upcoming stages ---
     lut: str = ""                                    # .cube LUT path
     target: str = ""                                 # delivery target preset id
 
@@ -54,6 +55,7 @@ STYLES: dict[str, Recipe] = {
     "Punchy SDR":  Recipe(hdr="off", grade=grade_dict("max")),
     "Sharp Photo": Recipe(model="x4plus", hdr="on", grade=grade_dict("vibrant")),
     "Clean":       Recipe(hdr="off", grade=grade_dict("none")),
+    "Smooth 60":   Recipe(hdr="on", grade=grade_dict("vibrant"), interpolate=2),
 }
 
 
@@ -85,6 +87,9 @@ def apply_to_args(recipe: Recipe, args, given: set) -> None:
         setg("duration", "--duration", recipe.trim_dur)
     if not recipe.audio:
         setg("no_audio", "--no-audio", True)
+    setg("interpolate", "--interpolate", recipe.interpolate)
+    if recipe.slowmo:
+        setg("slowmo", "--slowmo", True)
     # grade knobs (only fill those the user didn't override)
     knob_flag = {"saturation": "--saturation", "vibrance": "--vibrance-amt",
                  "contrast": "--contrast", "gamma": "--gamma", "warmth": "--warmth",

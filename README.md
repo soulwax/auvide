@@ -129,7 +129,9 @@ python upscale_hdr.py --preview --at 25,95 # at chosen seconds -> output/preview
 
 | flag | default | meaning |
 |------|---------|---------|
-| `--style NAME` | | one-tap look (Vibrant HDR / Cinematic / Natural / Punchy SDR / Sharp Photo / Clean); explicit flags still win |
+| `--style NAME` | | one-tap look (Vibrant HDR / Cinematic / Natural / Punchy SDR / Sharp Photo / Clean / **Smooth 60**); explicit flags still win |
+| `--interpolate {2,3,4}` | `0` | RIFE AI frame interpolation — smoother motion / ~60fps |
+| `--slowmo` | | with `--interpolate`: slow-motion (keep fps) instead of smoother |
 | `--recipe FILE` / `--save-recipe FILE` | | load / save a full job recipe (`.json`) |
 | `--scale {2,3,4}` | `2` | upscale factor |
 | `--model {animevideo,x4plus,x4plus-anime}` | `animevideo` | `animevideo` = fast, denoises, best for real video; `x4plus` = sharper photographic detail |

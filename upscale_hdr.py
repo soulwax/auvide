@@ -35,6 +35,7 @@ from pathlib import Path
 
 import grade
 import recipe as recipes
+import stages
 import tools
 
 HERE = Path(__file__).resolve().parent
@@ -206,12 +207,19 @@ def make_preview(args, src: Path, info: dict) -> None:
     print(f"[preview] done — left = {left}, right = {right}")
 
 
-def encode_cmd(args, info, in_pattern: str, start_number: int, out_file: Path) -> list[str]:
+def normalize_seq(d: Path) -> str:
+    """Rename a dir's PNGs to a contiguous 1-based sequence, return the ffmpeg
+    pattern. Lets any stage's output naming/count feed the numeric image2 demuxer
+    (this ffmpeg build has no glob input)."""
+    for idx, f in enumerate(sorted(Path(d).glob("*.png")), 1):
+        f.rename(Path(d) / f"_seq_{idx:08d}.png")
+    return str(Path(d) / "_seq_%08d.png")
+
+
+def encode_cmd(args, info, in_pattern: str, out_fps: str, out_file: Path) -> list[str]:
     vf = build_vf(args, info)
-    fps = f"{info['fps_num']}/{info['fps_den']}"
-    cmd = [str(FFMPEG), "-y", "-framerate", fps,
-           "-start_number", str(start_number), "-i", in_pattern,
-           "-vf", vf]
+    cmd = [str(FFMPEG), "-y", "-framerate", out_fps,
+           "-start_number", "1", "-i", in_pattern, "-vf", vf]
 
     if args.hdr == "on":
         if args.encoder == "qsv":
@@ -302,6 +310,10 @@ def main() -> None:
     ap.add_argument("--start", type=float, default=0.0, help="trim: start seconds")
     ap.add_argument("--duration", type=float, help="trim: seconds to process (default: to end)")
     ap.add_argument("--no-audio", action="store_true", dest="no_audio", help="drop audio")
+    ap.add_argument("--interpolate", type=int, default=0, choices=[0, 2, 3, 4],
+                    help="RIFE frame interpolation (0=off, 2=2x smoother/~60fps)")
+    ap.add_argument("--slowmo", action="store_true",
+                    help="with --interpolate: keep fps (slow-motion) instead of smoother")
     ap.add_argument("--chunk", type=int, default=300, help="frames encoded per chunk")
     ap.add_argument("--gpu", type=int, default=0, help="Real-ESRGAN GPU id (-1 = CPU)")
     ap.add_argument("--tile", type=int, default=0, help="Real-ESRGAN tile size (0=auto)")
@@ -323,7 +335,8 @@ def main() -> None:
             scale=args.scale, model=args.model, hdr=args.hdr, encoder=args.encoder,
             crf=args.crf, preset=args.preset, hdr_gain=args.hdr_gain,
             grade={k: getattr(g, k) for k in recipes.GRADE_KNOBS},
-            trim_start=args.start, trim_dur=args.duration or 0.0, audio=not args.no_audio)
+            trim_start=args.start, trim_dur=args.duration or 0.0, audio=not args.no_audio,
+            interpolate=args.interpolate, slowmo=args.slowmo)
         recipes.save(rc, args.save_recipe)
         print(f"[recipe] saved -> {args.save_recipe}")
 
@@ -389,6 +402,9 @@ def main() -> None:
           f"{fmt_eta(info['duration'])}")
     print(f"  target      {tw}x{th}  ({args.scale}x)")
     print(f"  model       {model_name}  (realesrgan -s {realesr_scale})")
+    if args.interpolate and args.interpolate > 1:
+        print(f"  interpolate {args.interpolate}x RIFE "
+              f"({'slow-mo' if args.slowmo else 'smooth'})")
     style_s = f"style={args.style}  " if args.style else ""
     print(f"  grade       {args.hdr.upper()}  {style_s}encoder={args.encoder}  crf={args.crf}")
     if args.start or args.duration:
@@ -426,11 +442,18 @@ def main() -> None:
     total = have  # actual frames on disk (may differ from container's nb_frames)
     n_chunks = math.ceil(total / args.chunk)
 
-    # ---- phase 2: upscale + encode each chunk ----------------------------
-    print(f"[2/3] upscaling + HDR encoding ({total} frames, {n_chunks} chunks) ...",
-          flush=True)
+    frame_stages = stages.build_frame_stages(args)
+    fmult = stages.total_frame_multiplier(frame_stages)
+    smooth = not args.slowmo
+    if fmult > 1 and smooth:
+        out_fps = f"{info['fps_num'] * fmult}/{info['fps_den']}"
+    else:
+        out_fps = f"{info['fps_num']}/{info['fps_den']}"
+    chain = " -> ".join(s.label for s in frame_stages)
+
+    # ---- phase 2: process + encode each chunk ----------------------------
+    print(f"[2/3] {chain} + encode ({total} frames, {n_chunks} chunks) ...", flush=True)
     batch_in = work / "batch_in"
-    batch_out = work / "batch_out"
     done_frames = 0
     run_start = time.time()
 
@@ -447,25 +470,31 @@ def main() -> None:
             done_frames += count
             continue
 
-        # fresh batch folders
-        for d in (batch_in, batch_out):
-            if d.exists():
-                shutil.rmtree(d)
-            d.mkdir(parents=True)
-
+        # fresh batch input
+        if batch_in.exists():
+            shutil.rmtree(batch_in)
+        batch_in.mkdir(parents=True)
         for i in range(start, end + 1):
             name = f"frame_{i:06d}.png"
             shutil.copy2(frames_in / name, batch_in / name)
 
         t0 = time.time()
-        re_cmd = [str(REALESRGAN), "-i", str(batch_in), "-o", str(batch_out),
-                  "-n", model_name, "-s", str(realesr_scale),
-                  "-m", str(MODELS), "-g", str(args.gpu), "-f", "png"]
-        if args.tile > 0:
-            re_cmd += ["-t", str(args.tile)]
-        run(re_cmd)
-
-        run(encode_cmd(args, info, str(batch_out / "frame_%06d.png"), start, seg))
+        cur = batch_in
+        try:
+            for si, stage in enumerate(frame_stages):     # upscale -> [interpolate] -> ...
+                nxt = work / f"batch_s{si}"
+                if nxt.exists():
+                    shutil.rmtree(nxt)
+                nxt.mkdir(parents=True)
+                stage.process(cur, nxt)
+                if cur is not batch_in:
+                    shutil.rmtree(cur, ignore_errors=True)
+                cur = nxt
+        except stages.StageError as e:
+            die(str(e))
+        pattern = normalize_seq(cur)
+        run(encode_cmd(args, info, pattern, out_fps, seg))
+        shutil.rmtree(cur, ignore_errors=True)
 
         done_frames += count
         elapsed = time.time() - run_start
@@ -476,9 +505,8 @@ def main() -> None:
               flush=True)
 
     # tidy transient batch dirs
-    for d in (batch_in, batch_out):
-        if d.exists():
-            shutil.rmtree(d)
+    for d in list(work.glob("batch_*")):
+        shutil.rmtree(d, ignore_errors=True)
 
     # ---- phase 3: concat + mux audio -------------------------------------
     print("[3/3] concatenating chunks + muxing audio ...", flush=True)
@@ -489,7 +517,9 @@ def main() -> None:
     list_file.write_text("".join(f"file '{s.as_posix()}'\n" for s in segs))
 
     concat_cmd = [str(FFMPEG), "-y", "-f", "concat", "-safe", "0", "-i", str(list_file)]
-    if info["has_audio"] and not args.no_audio:
+    # slow-mo changes duration, so audio can't be kept in sync -> drop it
+    keep_audio = info["has_audio"] and not args.no_audio and (fmult == 1 or smooth)
+    if keep_audio:
         au = []                                  # trim audio to match the video
         if args.start:
             au += ["-ss", str(args.start)]
@@ -507,9 +537,10 @@ def main() -> None:
         shutil.rmtree(work, ignore_errors=True)
 
     size_mb = out.stat().st_size / (1024 * 1024)
+    eff_fps = info["fps"] * fmult if smooth else info["fps"]
     print("=" * 60)
     print(f"  done  ->  {out}")
-    print(f"  {tw}x{th}  {info['fps']:.3f} fps  {size_mb:.1f} MB  "
+    print(f"  {tw}x{th}  {eff_fps:.3f} fps  {size_mb:.1f} MB  "
           f"total {fmt_eta(time.time()-run_start)}")
     print("=" * 60)
 

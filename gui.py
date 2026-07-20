@@ -272,6 +272,8 @@ class App:
         self.v_batch = tk.BooleanVar(value=False)
         self.v_start = tk.DoubleVar(value=0.0)
         self.v_dur = tk.DoubleVar(value=0.0)   # 0 = to end
+        self.v_interp = tk.StringVar(value="Off")   # RIFE: Off/2x/3x/4x
+        self.v_slowmo = tk.BooleanVar(value=False)
         self.v_zoom = tk.BooleanVar(value=False)   # 1:1 pixel-peek in preview
         self.v_status = tk.StringVar(value="Ready — choose a video to begin.")
         self.v_elapsed = tk.StringVar(value="")
@@ -408,6 +410,12 @@ class App:
         Tooltip(cbp, "Encoder speed/quality. Slower = smaller/better, much slower.")
         ttk.Checkbutton(num2, text="Include audio", variable=self.v_audio).pack(side="left", padx=14)
         ttk.Checkbutton(num2, text="Open when done", variable=self.v_open).pack(side="left", padx=8)
+        ttk.Label(num2, text="Interpolate", style="Muted.TLabel").pack(side="left", padx=(14, 4))
+        cbi = ttk.Combobox(num2, textvariable=self.v_interp, state="readonly", width=5,
+                           values=["Off", "2x", "3x", "4x"])
+        cbi.pack(side="left")
+        Tooltip(cbi, "RIFE AI frame interpolation — smoother motion / ~60fps.")
+        ttk.Checkbutton(num2, text="Slow-mo", variable=self.v_slowmo).pack(side="left", padx=8)
 
         trim = ttk.Frame(opt); trim.grid(row=5, column=0, columnspan=4, sticky="ew", pady=(4, 2))
         ttk.Label(trim, text="Trim", style="Muted.TLabel").pack(side="left", padx=(6, 8))
@@ -559,6 +567,8 @@ class App:
         self.v_scale.set(str(r.scale)); self.v_model.set(r.model); self.v_hdr.set(r.hdr)
         self.v_enc.set(r.encoder); self.v_crf.set(r.crf); self.v_preset.set(r.preset)
         self.v_hdrgain.set(r.hdr_gain)
+        self.v_interp.set({0: "Off", 2: "2x", 3: "3x", 4: "4x"}.get(r.interpolate, "Off"))
+        self.v_slowmo.set(r.slowmo)
         for k, *_ in GRADE_SLIDERS:
             if k in r.grade:
                 self.g_vars[k].set(r.grade[k])
@@ -910,6 +920,11 @@ class App:
             cmd += ["--duration", f"{self.v_dur.get():g}"]
         if not self.v_audio.get():
             cmd.append("--no-audio")
+        n = {"Off": 0, "2x": 2, "3x": 3, "4x": 4}.get(self.v_interp.get(), 0)
+        if n:
+            cmd += ["--interpolate", str(n)]
+            if self.v_slowmo.get():
+                cmd.append("--slowmo")
         if self.v_tile.get() > 0:
             cmd += ["--tile", str(self.v_tile.get())]
         if self.v_resume.get():
@@ -1147,7 +1162,7 @@ class App:
                  tile=self.v_tile, resume=self.v_resume, keep=self.v_keep, preset=self.v_preset,
                  audio=self.v_audio, open_done=self.v_open, notify=self.v_notify,
                  sleep=self.v_sleep, batch=self.v_batch, trim_start=self.v_start,
-                 trim_dur=self.v_dur)
+                 trim_dur=self.v_dur, interp=self.v_interp, slowmo=self.v_slowmo)
         for k, *_ in GRADE_SLIDERS:
             m[f"g_{k}"] = self.g_vars[k]
         return m
