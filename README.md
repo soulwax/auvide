@@ -17,30 +17,51 @@ back in untouched.
 
 ## Setup
 
-Requires **Python 3.8+** and a Vulkan-capable GPU (any modern integrated or
-discrete GPU works).
+Requires **Python 3.9+**, a **Vulkan-capable GPU** (any modern integrated or
+discrete GPU), and three prerequisites on your **PATH** — auvide does not bundle
+binaries, it uses your system package manager (canonical, fast, and cross-platform):
+
+| tool | why |
+|------|-----|
+| `ffmpeg` + `ffprobe` | decode / encode / color pipeline |
+| `realesrgan-ncnn-vulkan` | AI upscaler (GPU) |
+
+**Install the prerequisites:**
 
 ```powershell
-# 1. download ffmpeg, ffprobe, realesrgan + models into ./bin
+# Windows (scoop is canonical) — installs ffmpeg + realesrgan and caches models
 powershell -ExecutionPolicy Bypass -File .\setup.ps1
-
-# 2. Python deps (for the GUI's live grade preview)
-pip install -r requirements.txt          # or: uv pip install -r requirements.txt
+```
+```bash
+# macOS
+brew install ffmpeg realesrgan-ncnn-vulkan
+# Arch
+sudo pacman -S ffmpeg && yay -S realesrgan-ncnn-vulkan     # realesrgan from AUR
+# Ubuntu / Debian
+sudo apt install ffmpeg     # + realesrgan-ncnn-vulkan from the upstream release
+# Fedora
+sudo dnf install ffmpeg     # + realesrgan-ncnn-vulkan from the upstream release
 ```
 
-The heavy binaries in `bin/` are **not** committed (ffmpeg alone exceeds
-GitHub's 100 MB file limit) — `setup.ps1` fetches them. The only Python
-dependency is Pillow (live preview); everything else is stdlib. `pyproject.toml`
-also exposes `auvide` / `auvide-gui` console scripts if you `pip install .`.
+The **Real-ESRGAN models** (`.param`/`.bin`, data not binaries) are cached in
+`%LOCALAPPDATA%\auvide\models` (or `~/.cache/auvide/models`). `setup.ps1` fetches
+them; on other OSes drop the model files there, or install a realesrgan build
+that ships models beside its binary. auvide checks all of this up front and
+prints exactly what's missing.
+
+Then the Python dep (for the GUI's live preview): `pip install -r requirements.txt`
+(only Pillow; everything else is stdlib). `pyproject.toml` also exposes `auvide` /
+`auvide-gui` console scripts via `pip install .`.
 
 ## Project layout
 
 ```
 input/    <- put source videos here (CLI/GUI auto-pick a lone video)
 output/   <- renders land here
-bin/      <- bundled ffmpeg / ffprobe / realesrgan + models (provisioned)
 legacy/   <- the earlier standalone vibrant_upscale.py, kept for reference
 ```
+
+Binaries are **not** here — they live on your PATH (see Setup).
 
 With one video in `input/`, just run `python upscale_hdr.py` — no arguments
 needed. The GUI auto-loads it too.

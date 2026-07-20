@@ -25,6 +25,8 @@ class Grade:
     gamma: float = 1.05        # 0.8 .. 1.3   midtone lift (>1 brighter)
     warmth: float = -0.55      # -1 cool .. +1 warm (neg neutralizes warm source)
     sharpen: float = 0.50      # 0.0 .. 1.5   unsharp luma amount
+    exposure: float = 0.0      # -1 .. +1     overall brightness
+    tint: float = 0.0          # -1 green .. +1 magenta
 
 
 # tuned presets (level 2 "vibrant" is the validated sweet spot)
@@ -57,13 +59,15 @@ def build_chain(g: Grade, out_format: str | None = "yuv420p10le",
         parts.append(f"format={working}")
     if g.contrast > 0.001:
         parts.append(f"curves=master={_scurve(g.contrast)}")
-    if abs(g.warmth) > 0.001:
+    if abs(g.warmth) > 0.001 or abs(g.tint) > 0.001:
         w = clamp(g.warmth, -1.0, 1.0)
+        ti = clamp(g.tint, -1.0, 1.0)
         parts.append(
-            f"colorbalance=rm={0.09 * w:.3f}:bm={-0.073 * w:.3f}:"
+            f"colorbalance=rm={0.09 * w:.3f}:gm={-0.06 * ti:.3f}:bm={-0.073 * w:.3f}:"
             f"rs={0.055 * w:.3f}:bs={-0.055 * w:.3f}")
     parts.append(f"eq=saturation={clamp(g.saturation, 0.0, 3.0):.3f}:"
-                 f"gamma={clamp(g.gamma, 0.1, 3.0):.3f}")
+                 f"gamma={clamp(g.gamma, 0.1, 3.0):.3f}:"
+                 f"brightness={clamp(g.exposure, -1.0, 1.0) * 0.12:.4f}")
     if g.vibrance > 0.001:
         parts.append(f"vibrance=intensity={clamp(g.vibrance, 0.0, 2.0):.3f}")
     if g.sharpen > 0.001:

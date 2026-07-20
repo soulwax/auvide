@@ -1,66 +1,52 @@
 <#
-  setup.ps1 - provision the bundled binaries into ./bin
+  setup.ps1 - install auvide prerequisites on Windows via scoop, and cache the
+  Real-ESRGAN models locally.
 
-  Downloads and unpacks:
-    * ffmpeg + ffprobe   (gyan.dev release-essentials build; includes libx265 + zscale)
-    * realesrgan-ncnn-vulkan + AI models   (xinntao Real-ESRGAN release)
+  auvide does NOT bundle binaries: it resolves ffmpeg / ffprobe /
+  realesrgan-ncnn-vulkan from PATH. scoop is the canonical installer on Windows.
 
-  These are third-party redistributables and (for ffmpeg) exceed GitHub's
-  100 MB per-file limit, so they are fetched here instead of committed.
-
-  Usage:   powershell -ExecutionPolicy Bypass -File .\setup.ps1
+  Usage:  powershell -ExecutionPolicy Bypass -File .\setup.ps1
 #>
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$root = $PSScriptRoot
-$bin  = Join-Path $root "bin"
-$models = Join-Path $bin "models"
-$tmp  = Join-Path $env:TEMP "auvide-setup"
-New-Item -ItemType Directory -Force -Path $bin, $models, $tmp | Out-Null
+function Have($n) { [bool](Get-Command $n -ErrorAction SilentlyContinue) }
 
-function Get-File($url, $dest) {
-    Write-Host "  downloading $url"
-    Invoke-WebRequest -Uri $url -OutFile $dest -MaximumRedirection 5 -TimeoutSec 300
+if (-not (Have scoop)) {
+    Write-Host "[scoop] not found. Install it first (https://scoop.sh):" -ForegroundColor Yellow
+    Write-Host '  Set-ExecutionPolicy -Scope CurrentUser RemoteSigned'
+    Write-Host '  irm get.scoop.sh | iex'
+    exit 1
 }
 
-# ---- ffmpeg / ffprobe -------------------------------------------------
-if ((Test-Path (Join-Path $bin "ffmpeg.exe")) -and (Test-Path (Join-Path $bin "ffprobe.exe"))) {
-    Write-Host "[ffmpeg] already present, skipping"
-} else {
-    Write-Host "[ffmpeg] fetching release-essentials build ..."
-    $zip = Join-Path $tmp "ffmpeg.zip"
-    Get-File "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" $zip
-    $ex = Join-Path $tmp "ffmpeg"
-    Expand-Archive -Path $zip -DestinationPath $ex -Force
-    Get-ChildItem $ex -Recurse -Include ffmpeg.exe, ffprobe.exe | ForEach-Object {
-        Copy-Item $_.FullName (Join-Path $bin $_.Name) -Force
-    }
-    Write-Host "[ffmpeg] done"
-}
+Write-Host "[deps] scoop install ffmpeg realesrgan-ncnn-vulkan ..."
+scoop install ffmpeg realesrgan-ncnn-vulkan
 
-# ---- realesrgan + models ---------------------------------------------
-if (Test-Path (Join-Path $bin "realesrgan-ncnn-vulkan.exe")) {
-    Write-Host "[realesrgan] exe already present, skipping"
-} else {
-    Write-Host "[realesrgan] fetching ncnn-vulkan build + models ..."
+# The scoop realesrgan package ships without model weights -> cache them locally.
+$cache = Join-Path $env:LOCALAPPDATA "auvide\models"
+New-Item -ItemType Directory -Force $cache | Out-Null
+if (Get-ChildItem $cache -Filter *.param -ErrorAction SilentlyContinue) {
+    Write-Host "[models] already cached at $cache"
+}
+else {
+    Write-Host "[models] downloading Real-ESRGAN models ..."
+    $tmp = Join-Path $env:TEMP "auvide-setup"
+    New-Item -ItemType Directory -Force $tmp | Out-Null
     $zip = Join-Path $tmp "realesrgan.zip"
-    Get-File "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-windows.zip" $zip
-    $ex = Join-Path $tmp "realesrgan"
-    Expand-Archive -Path $zip -DestinationPath $ex -Force
-    Get-ChildItem $ex -Recurse -Include realesrgan-ncnn-vulkan.exe, *.dll | ForEach-Object {
-        Copy-Item $_.FullName (Join-Path $bin $_.Name) -Force
-    }
-    Get-ChildItem $ex -Recurse -Include *.param, *.bin | ForEach-Object {
-        Copy-Item $_.FullName (Join-Path $models $_.Name) -Force
-    }
-    Write-Host "[realesrgan] done"
+    Invoke-WebRequest "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-windows.zip" `
+        -OutFile $zip -MaximumRedirection 5 -TimeoutSec 300
+    $ex = Join-Path $tmp "re"
+    Expand-Archive $zip $ex -Force
+    Get-ChildItem $ex -Recurse -Include *.param, *.bin |
+        ForEach-Object { Copy-Item $_.FullName (Join-Path $cache $_.Name) -Force }
+    Write-Host "[models] cached at $cache"
 }
 
 Write-Host ""
-Write-Host "bin/ contents:"
-Get-ChildItem $bin -Recurse -File |
-    Select-Object @{N='file';E={$_.FullName.Replace($root,'.')}},
-                  @{N='MB';E={[math]::Round($_.Length/1MB,2)}} |
-    Format-Table -AutoSize
-Write-Host "Setup complete. Try:  python upscale_hdr.py --help"
+Write-Host "Done. Prerequisites:" -ForegroundColor Green
+foreach ($t in "ffmpeg", "ffprobe", "realesrgan-ncnn-vulkan") {
+    $c = Get-Command $t -ErrorAction SilentlyContinue
+    Write-Host ("  {0,-24} {1}" -f $t, $(if ($c) { $c.Source } else { "MISSING" }))
+}
+Write-Host ""
+Write-Host "Run it:  uv run --python 3.12 --with pillow gui.py"

@@ -30,6 +30,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 import grade
+import tools
 
 try:
     from PIL import Image, ImageTk, ImageDraw
@@ -39,8 +40,8 @@ except Exception:
 
 HERE = Path(__file__).resolve().parent
 CLI = HERE / "upscale_hdr.py"
-FFMPEG = HERE / "bin" / "ffmpeg.exe"
-FFPROBE = HERE / "bin" / "ffprobe.exe"
+FFMPEG = tools.ffmpeg()
+FFPROBE = tools.ffprobe()
 CONFIG = Path(os.environ.get("LOCALAPPDATA", HERE)) / "auvide" / "gui.json"
 PREVIEW_DIR = Path(os.environ.get("TEMP", HERE)) / "auvide" / "preview"
 INPUT_DIR = HERE / "input"
@@ -55,11 +56,13 @@ VIDEO_TYPES = [("Video files", "*.mp4 *.mkv *.mov *.avi *.webm *.m4v"), ("All fi
 
 # grade slider specs: (key, label, min, max, tip)
 GRADE_SLIDERS = [
+    ("exposure", "Exposure", -1.0, 1.0, "Overall brightness."),
     ("saturation", "Saturation", 0.5, 2.0, "Overall color intensity (1.0 = unchanged)."),
     ("vibrance", "Vibrance", 0.0, 1.0, "Selective saturation — boosts muted colors, protects skin."),
     ("contrast", "Contrast", 0.0, 1.0, "S-curve depth: deepens blacks, lifts highlights."),
     ("gamma", "Midtones", 0.8, 1.3, "Lift/lower midtone brightness (>1 brighter)."),
     ("warmth", "Warmth", -1.0, 1.0, "Cool (−) neutralizes a warm cast; warm (+) adds it."),
+    ("tint", "Tint", -1.0, 1.0, "Green (−)  ↔  magenta (+) balance."),
     ("sharpen", "Sharpen", 0.0, 1.5, "Micro-contrast / edge sharpening."),
 ]
 
@@ -70,11 +73,33 @@ DONE_RE = re.compile(r"done\s+->")
 NOWINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 # palette
-BG = "#14151b"; PANEL = "#1d1f28"; FIELD = "#2a2d3a"; LINE = "#33364a"
-TEXT = "#e7e8f0"; MUTED = "#8b8fa6"; ACCENT = "#6c8cff"; ACCENT_HI = "#8aa2ff"
-OK = "#5ec98a"; ERR = "#e06c75"
+BG = "#101218"; PANEL = "#191b24"; FIELD = "#262a37"; LINE = "#333849"
+TEXT = "#e9eaf2"; MUTED = "#888da4"
+OK = "#57c98a"; ERR = "#e0687a"
+ACCENTS = {  # name -> (base, hover/brighter)
+    "Indigo": ("#6c8cff", "#8aa2ff"),
+    "Violet": ("#a78bfa", "#c4b5fd"),
+    "Teal":   ("#2dd4bf", "#5eead4"),
+    "Amber":  ("#e0a35a", "#f0c084"),
+    "Rose":   ("#fb7185", "#fda4af"),
+}
+ACCENT, ACCENT_HI = ACCENTS["Indigo"]
 FONT = ("Segoe UI", 10); FONT_SM = ("Segoe UI", 9)
-FONT_H = ("Segoe UI Semibold", 17); FONT_MONO = ("Consolas", 9)
+FONT_H = ("Segoe UI Semibold", 18); FONT_MONO = ("Consolas", 9)
+
+
+def configure_accent(s, root, base, hi):
+    """(Re)apply the accent-dependent styles — call to switch accent live."""
+    s.configure("Accent.TButton", background=base, foreground="#0f1016",
+                font=("Segoe UI Semibold", 10), padding=(16, 6))
+    s.map("Accent.TButton", background=[("active", hi), ("disabled", LINE)],
+          foreground=[("disabled", MUTED)])
+    s.configure("Accent.Horizontal.TProgressbar", background=base, troughcolor=FIELD,
+                bordercolor=LINE, lightcolor=base, darkcolor=base)
+    s.configure("Val.TLabel", background=PANEL, foreground=hi, font=FONT_SM, width=6)
+    s.configure("TLabelframe.Label", background=PANEL, foreground=hi, font=FONT_SM)
+    s.map("TNotebook.Tab", background=[("selected", FIELD)], foreground=[("selected", TEXT)])
+    root.option_add("*TCombobox*Listbox.selectBackground", base)
 
 
 def apply_theme(root: tk.Tk):
@@ -129,6 +154,8 @@ def apply_theme(root: tk.Tk):
     root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
     root.option_add("*TCombobox*Listbox.selectForeground", "#0f1016")
     root.option_add("*TCombobox*Listbox.font", FONT_SM)
+    configure_accent(s, root, ACCENT, ACCENT_HI)
+    return s
 
 
 class Tooltip:
@@ -158,7 +185,7 @@ class Tooltip:
 class App:
     PW, PH = 900, 470  # preview canvas size
 
-    def __init__(self, root: tk.Tk, self_test: bool = False):
+    def __init__(self, root: tk.Tk, self_test: bool = False, screenshot=None):
         self.root = root
         self.proc = None
         self.q: queue.Queue = queue.Queue()
@@ -180,13 +207,16 @@ class App:
         self._ab_off_after = None
         self._preset_defaults = grade.PRESETS["vibrant"]
         root.title("auvide  ·  AI upscale + vibrant HDR10")
-        root.minsize(940, 720)
-        apply_theme(root)
+        root.minsize(960, 740)
+        self.style = apply_theme(root)
+        self.accent = "Indigo"
+        self._accentbar = None
         PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
 
         self._build_vars()
         self._build_ui()
         self._load_config()
+        self._check_deps_ui()
         self._autoload_input()
         self._poll()
         self._tick_elapsed()
@@ -194,6 +224,24 @@ class App:
         self._center()
         if self_test:
             root.after(300, root.destroy)
+        if screenshot:
+            self._shotdir = screenshot
+            root.after(2200, self._shots)
+
+    def _shots(self):
+        try:
+            from PIL import ImageGrab
+            self.root.deiconify(); self.root.lift(); self.root.update()
+
+            def cap(name):
+                self.root.update_idletasks()
+                ImageGrab.grab().save(str(Path(self._shotdir) / name))  # full primary screen
+            cap("render.png")
+            self.nb.select(self.tab_prev)
+            self.root.after(3200, lambda: (cap("preview.png"), self.root.destroy()))
+        except Exception as e:
+            print("screenshot failed:", e)
+            self.root.destroy()
 
     # ---- state ----------------------------------------------------------
     def _build_vars(self):
@@ -210,6 +258,11 @@ class App:
         self.v_tile = tk.IntVar(value=0)
         self.v_resume = tk.BooleanVar(value=True)
         self.v_keep = tk.BooleanVar(value=False)
+        self.v_preset = tk.StringVar(value="medium")
+        self.v_audio = tk.BooleanVar(value=True)
+        self.v_open = tk.BooleanVar(value=True)
+        self.v_start = tk.DoubleVar(value=0.0)
+        self.v_dur = tk.DoubleVar(value=0.0)   # 0 = to end
         self.v_status = tk.StringVar(value="Ready — choose a video to begin.")
         self.v_elapsed = tk.StringVar(value="")
         self.v_plan = tk.StringVar(value="No file selected.")
@@ -233,15 +286,31 @@ class App:
     def _fmt(v):
         return f"{v:+.2f}" if v < 0 else f"{v:.2f}"
 
+    def _dbg(self, *a):
+        if os.environ.get("AUVIDE_DEBUG"):
+            print("[dbg]", *a, file=sys.stderr, flush=True)
+
     # ---- layout ---------------------------------------------------------
     def _build_ui(self):
-        head = ttk.Frame(self.root, style="Bg.TFrame", padding=(18, 12, 18, 6))
+        head = ttk.Frame(self.root, style="Bg.TFrame", padding=(18, 12, 18, 4))
         head.pack(fill="x")
         ttk.Label(head, text="auvide", style="Head.TLabel").pack(side="left")
         ttk.Label(head, text="AI upscale  →  vibrant HDR10", style="MutedBg.TLabel").pack(
-            side="left", padx=12, pady=(8, 0))
+            side="left", padx=12, pady=(10, 0))
+        sw = ttk.Frame(head, style="Bg.TFrame"); sw.pack(side="right", pady=(4, 0))
+        ttk.Label(sw, text="Accent", style="MutedBg.TLabel").pack(side="left", padx=(0, 8))
+        self._swatches = {}
+        for name, (base, hi) in ACCENTS.items():
+            c = tk.Frame(sw, width=18, height=18, background=base, cursor="hand2",
+                         highlightthickness=2, highlightbackground=BG)
+            c.pack(side="left", padx=3); c.pack_propagate(False)
+            c.bind("<Button-1>", lambda e, n=name: self._set_accent(n))
+            self._swatches[name] = c
+        self._accentbar = tk.Frame(self.root, height=2, background=ACCENT)
+        self._accentbar.pack(fill="x")
 
         nb = ttk.Notebook(self.root)
+        self.nb = nb
         nb.pack(fill="both", expand=True, padx=12, pady=(4, 10))
         self.tab_render = ttk.Frame(nb, padding=12)
         self.tab_prev = ttk.Frame(nb, padding=12)
@@ -249,6 +318,7 @@ class App:
         nb.add(self.tab_prev, text="  Grade & Preview  ")
         self._build_render_tab(self.tab_render)
         self._build_preview_tab(self.tab_prev)
+        self._set_accent(self.accent)
 
     def _build_render_tab(self, body):
         body.columnconfigure(0, weight=1)
@@ -313,6 +383,29 @@ class App:
         spin("Tile", self.v_tile, 0, 1024, 32, "0 = auto; lower on VRAM OOM.")
         ttk.Checkbutton(num, text="Resume", variable=self.v_resume).pack(side="left", padx=8)
         ttk.Checkbutton(num, text="Keep scratch", variable=self.v_keep).pack(side="left", padx=8)
+
+        num2 = ttk.Frame(opt); num2.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(4, 2))
+        ttk.Label(num2, text="Enc preset", style="Muted.TLabel").pack(side="left", padx=(6, 5))
+        cbp = ttk.Combobox(num2, textvariable=self.v_preset, state="readonly", width=10,
+                           values=["ultrafast", "veryfast", "faster", "fast", "medium",
+                                   "slow", "slower", "veryslow"])
+        cbp.pack(side="left")
+        Tooltip(cbp, "Encoder speed/quality. Slower = smaller/better, much slower.")
+        ttk.Checkbutton(num2, text="Include audio", variable=self.v_audio).pack(side="left", padx=14)
+        ttk.Checkbutton(num2, text="Open when done", variable=self.v_open).pack(side="left", padx=8)
+
+        trim = ttk.Frame(opt); trim.grid(row=5, column=0, columnspan=4, sticky="ew", pady=(4, 2))
+        ttk.Label(trim, text="Trim", style="Muted.TLabel").pack(side="left", padx=(6, 8))
+        ttk.Label(trim, text="start", style="Muted.TLabel").pack(side="left")
+        sp1 = ttk.Spinbox(trim, from_=0, to=100000, increment=1, textvariable=self.v_start, width=7)
+        sp1.pack(side="left", padx=(4, 2))
+        ttk.Label(trim, text="s    length", style="Muted.TLabel").pack(side="left")
+        sp2 = ttk.Spinbox(trim, from_=0, to=100000, increment=1, textvariable=self.v_dur, width=7)
+        sp2.pack(side="left", padx=(4, 2))
+        ttk.Label(trim, text="s   (length 0 = whole clip · set a few seconds for a quick test)",
+                  style="Muted.TLabel").pack(side="left", padx=(4, 0))
+        Tooltip(sp1, "Skip this many seconds from the start.")
+        Tooltip(sp2, "Process only this many seconds (0 = to the end).")
 
         bar = ttk.Frame(body); bar.grid(row=3, column=0, sticky="ew", pady=(8, 4))
         self.btn_start = ttk.Button(bar, text="▶  Start", style="Accent.TButton", command=self._start)
@@ -407,6 +500,17 @@ class App:
                    command=lambda: self._apply_grade_preset("vibrant")).pack(side="left", padx=(12, 3))
 
     # ---- helpers --------------------------------------------------------
+    def _set_accent(self, name):
+        if name not in ACCENTS:
+            return
+        base, hi = ACCENTS[name]
+        self.accent = name
+        configure_accent(self.style, self.root, base, hi)
+        if self._accentbar:
+            self._accentbar.configure(background=base)
+        for n, c in getattr(self, "_swatches", {}).items():
+            c.configure(highlightbackground=(TEXT if n == name else BG))
+
     def _center(self):
         self.root.update_idletasks()
         w, h = self.root.winfo_width(), self.root.winfo_height()
@@ -440,6 +544,12 @@ class App:
         tag = "hdr" if self.v_hdr.get() == "on" else "sdr"
         self.v_out.set(str(OUTPUT_DIR / f"{p.stem}_{self.v_scale.get()}x_{tag}.mp4"))
 
+    def _check_deps_ui(self):
+        m = tools.missing()
+        if m:
+            self._set_status("Missing: " + ", ".join(m)
+                             + " — run setup.ps1 (Windows) or see README.", "err")
+
     def _autoload_input(self):
         if self.v_in.get().strip() or not INPUT_DIR.exists():
             return
@@ -464,7 +574,7 @@ class App:
 
     def _on_input_change(self):
         p = self.v_in.get().strip()
-        if p and Path(p).exists() and FFPROBE.exists():
+        if p and Path(p).exists() and FFPROBE:
             self.v_plan.set("Reading media…")
             threading.Thread(target=self._probe, args=(p,), daemon=True).start()
         else:
@@ -502,6 +612,8 @@ class App:
 
     def _on_media_ready(self):
         """Media probed: set the scrubber range and auto-load a frame."""
+        self._dbg("media_ready HAVE_PIL=", HAVE_PIL, "info=", bool(self.info),
+                  "loaded=", self._loaded)
         if not HAVE_PIL or not self.info:
             return
         dur = self.info["dur"]
@@ -548,6 +660,7 @@ class App:
         self._frame_after = None
         self._fgen += 1
         self.v_pstatus.set("Loading frame…")
+        self._dbg("kick_frame t=", self.v_ptime.get(), "gen=", self._fgen)
         threading.Thread(target=self._extract_worker,
                          args=(self._fgen, self.v_in.get().strip(),
                                max(0.0, float(self.v_ptime.get()))), daemon=True).start()
@@ -555,11 +668,15 @@ class App:
     def _extract_worker(self, gen, path, t):
         src = PREVIEW_DIR / "src.png"
         try:
-            subprocess.run([str(FFMPEG), "-y", "-ss", str(t), "-i", path, "-frames:v", "1",
-                            str(src)], creationflags=NOWINDOW, capture_output=True, timeout=60)
+            r = subprocess.run([str(FFMPEG), "-y", "-ss", str(t), "-i", path, "-frames:v", "1",
+                                str(src)], creationflags=NOWINDOW, capture_output=True,
+                               text=True, timeout=60)
+            self._dbg("extract rc=", r.returncode, "exists=", src.exists(),
+                      "err=", r.stderr[-160:] if r.returncode else "")
             img = Image.open(src).convert("RGB"); img.load()
             self.q.put(("sample", gen, img))
         except Exception as e:
+            self._dbg("extract EXC", e)
             self.q.put(("perror", f"could not extract frame: {e}"))
 
     def _ab(self, show_original):
@@ -666,8 +783,15 @@ class App:
                "--gpu", str(self.v_gpu.get()),
                "--saturation", f"{g.saturation:.3f}", "--vibrance-amt", f"{g.vibrance:.3f}",
                "--contrast", f"{g.contrast:.3f}", "--gamma", f"{g.gamma:.3f}",
-               "--warmth", f"{g.warmth:.3f}", "--sharpen", f"{g.sharpen:.3f}",
-               "--hdr-gain", f"{self.v_hdrgain.get():.2f}"]
+               "--warmth", f"{g.warmth:.3f}", "--tint", f"{g.tint:.3f}",
+               "--exposure", f"{g.exposure:.3f}", "--sharpen", f"{g.sharpen:.3f}",
+               "--hdr-gain", f"{self.v_hdrgain.get():.2f}", "--preset", self.v_preset.get()]
+        if self.v_start.get() > 0:
+            cmd += ["--start", f"{self.v_start.get():g}"]
+        if self.v_dur.get() > 0:
+            cmd += ["--duration", f"{self.v_dur.get():g}"]
+        if not self.v_audio.get():
+            cmd.append("--no-audio")
         if self.v_tile.get() > 0:
             cmd += ["--tile", str(self.v_tile.get())]
         if self.v_resume.get():
@@ -780,6 +904,7 @@ class App:
                     elif kind == "exit":
                         self._on_exit(msg[1])
                     elif kind == "sample":
+                        self._dbg("poll sample gen=", msg[1], "cur=", self._fgen)
                         if msg[1] == self._fgen:      # ignore stale scrubs
                             self._orig = msg[2]
                             self._loaded = True
@@ -787,10 +912,12 @@ class App:
                                                "double-click a slider to reset")
                             self._schedule_render()
                     elif kind == "graded":
+                        self._dbg("poll graded gen=", msg[1], "cur=", self._pgen)
                         if msg[1] == self._pgen:
                             self._graded = msg[2]
                             self._composite()
                     elif kind == "perror":
+                        self._dbg("poll perror", msg[1])
                         self.v_pstatus.set(msg[1])
                     continue
                 low = "err" if "[error]" in msg else ("ok" if DONE_RE.search(msg) else None)
@@ -821,6 +948,8 @@ class App:
             self.pbar.configure(value=100)
             self._set_status("Done ✔  —  output ready", "ok")
             self.btn_open.configure(state="normal")
+            if self.v_open.get():
+                self._open_out()
         else:
             self._set_status(f"Failed (exit {code}) — see log", "err")
         self.cancelling = False
@@ -830,7 +959,9 @@ class App:
     def _cfg_map(self):
         m = dict(scale=self.v_scale, model=self.v_model, hdr=self.v_hdr, encoder=self.v_enc,
                  crf=self.v_crf, hdrgain=self.v_hdrgain, chunk=self.v_chunk, gpu=self.v_gpu,
-                 tile=self.v_tile, resume=self.v_resume, keep=self.v_keep)
+                 tile=self.v_tile, resume=self.v_resume, keep=self.v_keep, preset=self.v_preset,
+                 audio=self.v_audio, open_done=self.v_open, trim_start=self.v_start,
+                 trim_dur=self.v_dur)
         for k, *_ in GRADE_SLIDERS:
             m[f"g_{k}"] = self.g_vars[k]
         return m
@@ -841,13 +972,17 @@ class App:
             for k, var in self._cfg_map().items():
                 if k in d:
                     var.set(d[k])
+            if d.get("accent") in ACCENTS:
+                self._set_accent(d["accent"])
         except Exception:
             pass
 
     def _save_config(self):
         try:
             CONFIG.parent.mkdir(parents=True, exist_ok=True)
-            CONFIG.write_text(json.dumps({k: v.get() for k, v in self._cfg_map().items()}, indent=2))
+            data = {k: v.get() for k, v in self._cfg_map().items()}
+            data["accent"] = self.accent
+            CONFIG.write_text(json.dumps(data, indent=2))
         except Exception:
             pass
 
@@ -862,12 +997,15 @@ class App:
 
 def main():
     self_test = "--self-test" in sys.argv
+    shot = None
+    if "--screenshot" in sys.argv:
+        shot = sys.argv[sys.argv.index("--screenshot") + 1]
     root = tk.Tk()
     try:
         root.tk.call("tk", "scaling", 1.25)
     except tk.TclError:
         pass
-    App(root, self_test=self_test)
+    App(root, self_test=self_test, screenshot=shot)
     root.mainloop()
     if self_test:
         print(f"self-test OK (Pillow={'yes' if HAVE_PIL else 'no'})")

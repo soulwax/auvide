@@ -7,8 +7,9 @@ Pipeline:
   3. re-encode in chunks to HDR10 (BT.2020 + PQ, 10-bit) with a vibrance grade
   4. concat the chunks and mux the original audio back in
 
-The tool is self-contained: it looks for ffmpeg/ffprobe/realesrgan and the
-Real-ESRGAN models inside ./bin (run setup.ps1 once to provision them).
+Prerequisites (ffmpeg, ffprobe, realesrgan-ncnn-vulkan) are resolved from PATH
+via your package manager — run setup.ps1 on Windows, or see tools.py / README
+for macOS / Arch / Ubuntu / Fedora. Real-ESRGAN models live in a local cache.
 
 Chunked encoding keeps peak disk usage bounded (a few GB) and makes the run
 resumable: finished chunks are skipped on re-run with --resume.
@@ -33,13 +34,13 @@ import time
 from pathlib import Path
 
 import grade
+import tools
 
 HERE = Path(__file__).resolve().parent
-BIN = HERE / "bin"
-FFMPEG = BIN / "ffmpeg.exe"
-FFPROBE = BIN / "ffprobe.exe"
-REALESRGAN = BIN / "realesrgan-ncnn-vulkan.exe"
-MODELS = BIN / "models"
+FFMPEG = tools.ffmpeg()
+FFPROBE = tools.ffprobe()
+REALESRGAN = tools.realesrgan()
+MODELS = tools.models_dir()
 INPUT_DIR = HERE / "input"
 OUTPUT_DIR = HERE / "output"
 VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v"}
@@ -80,12 +81,9 @@ def resolve_input(arg) -> Path:
 
 
 def check_deps() -> None:
-    missing = [str(p) for p in (FFMPEG, FFPROBE, REALESRGAN) if not p.exists()]
-    if missing:
-        die("missing bundled binaries:\n  " + "\n  ".join(missing) +
-            "\nRun setup.ps1 to download them into ./bin")
-    if not MODELS.exists():
-        die(f"missing models folder: {MODELS}\nRun setup.ps1 to provision it.")
+    m = tools.missing()
+    if m:
+        die("missing prerequisite(s): " + ", ".join(m) + "\n\n" + tools.INSTALL_HINT)
 
 
 def probe(src: Path) -> dict:
@@ -130,7 +128,8 @@ def resolve_grade(args) -> grade.Grade:
         grade.PRESETS[args.vibrance],
         saturation=args.saturation, vibrance=args.vibrance_amt,
         contrast=args.contrast, gamma=args.gamma,
-        warmth=args.warmth, sharpen=args.sharpen)
+        warmth=args.warmth, sharpen=args.sharpen,
+        exposure=args.exposure, tint=args.tint)
 
 
 def build_vf(args, info) -> str:
@@ -253,6 +252,8 @@ def main() -> None:
     grp.add_argument("--contrast", type=float, help="S-curve strength, 0..1")
     grp.add_argument("--gamma", type=float, help="midtone lift, >1 brighter")
     grp.add_argument("--warmth", type=float, help="-1 cool .. +1 warm")
+    grp.add_argument("--tint", type=float, help="-1 green .. +1 magenta")
+    grp.add_argument("--exposure", type=float, help="-1 .. +1 overall brightness")
     grp.add_argument("--sharpen", type=float, help="unsharp amount, 0..1.5")
     grp.add_argument("--hdr-gain", type=float, default=1.5, dest="hdr_gain",
                      help="HDR highlight expansion")
@@ -265,6 +266,9 @@ def main() -> None:
                     help="x265=software (best HDR fidelity), qsv=Intel GPU (faster)")
     ap.add_argument("--crf", type=int, default=19, help="quality (lower=better, 18-23 typical)")
     ap.add_argument("--preset", default="medium", help="x264/x265 preset")
+    ap.add_argument("--start", type=float, default=0.0, help="trim: start seconds")
+    ap.add_argument("--duration", type=float, help="trim: seconds to process (default: to end)")
+    ap.add_argument("--no-audio", action="store_true", dest="no_audio", help="drop audio")
     ap.add_argument("--chunk", type=int, default=300, help="frames encoded per chunk")
     ap.add_argument("--gpu", type=int, default=0, help="Real-ESRGAN GPU id (-1 = CPU)")
     ap.add_argument("--tile", type=int, default=0, help="Real-ESRGAN tile size (0=auto)")
@@ -301,7 +305,15 @@ def main() -> None:
     for d in (frames_in, seg_dir):
         d.mkdir(parents=True, exist_ok=True)
 
-    n_chunks = math.ceil(info["total"] / args.chunk)
+    # effective (possibly trimmed) frame count
+    expected = info["total"]
+    if args.duration:
+        expected = min(expected, int(round(args.duration * info["fps"])))
+    elif args.start:
+        expected = max(1, expected - int(round(args.start * info["fps"])))
+    n_chunks = math.ceil(expected / args.chunk)
+    trim = f"  trim        {args.start:g}s"
+    trim += f" +{args.duration:g}s" if args.duration else " -> end"
 
     print("=" * 60)
     print(f"  auvide  |  {src.name}")
@@ -313,6 +325,8 @@ def main() -> None:
     print(f"  model       {model_name}  (realesrgan -s {realesr_scale})")
     print(f"  grade       {args.hdr.upper()}  vibrance={args.vibrance}  "
           f"encoder={args.encoder}  crf={args.crf}")
+    if args.start or args.duration:
+        print(trim + f"   (~{expected} frames)")
     print(f"  chunks      {n_chunks} x {args.chunk} frames")
     print(f"  work dir    {work}")
     print(f"  output      {out}")
@@ -326,13 +340,19 @@ def main() -> None:
     # ---- phase 1: extract all frames -------------------------------------
     marker = frames_in / ".extracted"
     have = len(list(frames_in.glob("frame_*.png")))
-    if args.resume and marker.exists() and have >= info["total"] - 1:
+    if args.resume and marker.exists() and have >= expected - 1:
         print(f"[1/3] frames: reusing {have} extracted frames")
     else:
-        print(f"[1/3] extracting {info['total']} frames ...", flush=True)
+        print(f"[1/3] extracting {expected} frames ...", flush=True)
         t0 = time.time()
-        run([str(FFMPEG), "-y", "-i", str(src), "-vsync", "passthrough",
-             str(frames_in / "frame_%06d.png")])
+        ex = [str(FFMPEG), "-y"]
+        if args.start:
+            ex += ["-ss", str(args.start)]
+        ex += ["-i", str(src)]
+        if args.duration:
+            ex += ["-t", str(args.duration)]
+        ex += ["-vsync", "passthrough", str(frames_in / "frame_%06d.png")]
+        run(ex)
         marker.write_text("ok")
         have = len(list(frames_in.glob("frame_*.png")))
         print(f"      extracted {have} frames in {fmt_eta(time.time()-t0)}")
@@ -403,9 +423,14 @@ def main() -> None:
     list_file.write_text("".join(f"file '{s.as_posix()}'\n" for s in segs))
 
     concat_cmd = [str(FFMPEG), "-y", "-f", "concat", "-safe", "0", "-i", str(list_file)]
-    if info["has_audio"]:
-        concat_cmd += ["-i", str(src), "-map", "0:v:0", "-map", "1:a:0",
-                       "-c:v", "copy", "-c:a", "copy"]
+    if info["has_audio"] and not args.no_audio:
+        au = []                                  # trim audio to match the video
+        if args.start:
+            au += ["-ss", str(args.start)]
+        if args.duration:
+            au += ["-t", str(args.duration)]
+        au += ["-i", str(src)]
+        concat_cmd += au + ["-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "copy"]
     else:
         concat_cmd += ["-map", "0:v:0", "-c:v", "copy"]
     concat_cmd += ["-movflags", "+faststart", str(out)]
