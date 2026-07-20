@@ -34,6 +34,7 @@ import time
 from pathlib import Path
 
 import grade
+import recipe as recipes
 import tools
 
 HERE = Path(__file__).resolve().parent
@@ -265,6 +266,11 @@ def main() -> None:
     ap.add_argument("--scale", type=int, default=2, choices=[2, 3, 4], help="upscale factor")
     ap.add_argument("--model", default="animevideo", choices=list(MODEL_MAP),
                     help="Real-ESRGAN model (animevideo=fast/video, x4plus=sharp photo)")
+    ap.add_argument("--style", choices=list(recipes.STYLES),
+                    help="one-tap named look (sets the knobs; explicit flags still win)")
+    ap.add_argument("--recipe", type=Path, help="load a saved recipe .json")
+    ap.add_argument("--save-recipe", type=Path, dest="save_recipe",
+                    help="write the effective recipe to .json and continue")
     ap.add_argument("--vibrance", default="vibrant", choices=list(grade.PRESETS),
                     help="grade preset (base for the --grade knobs below)")
     # per-knob grade overrides (default None -> take the preset's value)
@@ -304,6 +310,22 @@ def main() -> None:
     ap.add_argument("--keep", action="store_true", help="keep scratch files after finishing")
     ap.add_argument("--dry-run", action="store_true", help="print the plan and exit")
     args = ap.parse_args()
+
+    # recipe / style overlay (explicit flags always win)
+    given = {a.split("=")[0] for a in sys.argv[1:] if a.startswith("--")}
+    if args.recipe:
+        recipes.apply_to_args(recipes.load(args.recipe), args, given)
+    if args.style:
+        recipes.apply_to_args(recipes.STYLES[args.style], args, given)
+    if args.save_recipe:
+        g = resolve_grade(args)
+        rc = recipes.Recipe(
+            scale=args.scale, model=args.model, hdr=args.hdr, encoder=args.encoder,
+            crf=args.crf, preset=args.preset, hdr_gain=args.hdr_gain,
+            grade={k: getattr(g, k) for k in recipes.GRADE_KNOBS},
+            trim_start=args.start, trim_dur=args.duration or 0.0, audio=not args.no_audio)
+        recipes.save(rc, args.save_recipe)
+        print(f"[recipe] saved -> {args.save_recipe}")
 
     check_deps()
 
@@ -367,8 +389,8 @@ def main() -> None:
           f"{fmt_eta(info['duration'])}")
     print(f"  target      {tw}x{th}  ({args.scale}x)")
     print(f"  model       {model_name}  (realesrgan -s {realesr_scale})")
-    print(f"  grade       {args.hdr.upper()}  vibrance={args.vibrance}  "
-          f"encoder={args.encoder}  crf={args.crf}")
+    style_s = f"style={args.style}  " if args.style else ""
+    print(f"  grade       {args.hdr.upper()}  {style_s}encoder={args.encoder}  crf={args.crf}")
     if args.start or args.duration:
         print(trim + f"   (~{expected} frames)")
     print(f"  chunks      {n_chunks} x {args.chunk} frames")

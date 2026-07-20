@@ -30,6 +30,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
 import grade
+import recipe as recipes
 import tools
 
 try:
@@ -344,6 +345,11 @@ class App:
         e_out.grid(row=1, column=1, sticky="ew", **pad)
         e_out.bind("<Key>", lambda *_: setattr(self, "out_edited", True))
         ttk.Button(files, text="Browse…", command=self._browse_out).grid(row=1, column=2, **pad)
+        stf = ttk.Frame(files); stf.grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Label(stf, text="Style", style="Muted.TLabel").pack(side="left", padx=(6, 8))
+        for name in recipes.STYLES:
+            ttk.Button(stf, text=name, style="Chip.TButton",
+                       command=lambda n=name: self._apply_style(n)).pack(side="left", padx=3)
 
         strip = tk.Frame(body, background=FIELD, highlightbackground=LINE, highlightthickness=1)
         strip.grid(row=1, column=0, sticky="ew", pady=(4, 8))
@@ -546,6 +552,17 @@ class App:
         self._preset_defaults = g
         for k, *_ in GRADE_SLIDERS:
             self.g_vars[k].set(getattr(g, k))
+
+    def _apply_style(self, name):
+        """One-tap Style: set every render + grade control from a named Recipe."""
+        r = recipes.STYLES[name]
+        self.v_scale.set(str(r.scale)); self.v_model.set(r.model); self.v_hdr.set(r.hdr)
+        self.v_enc.set(r.encoder); self.v_crf.set(r.crf); self.v_preset.set(r.preset)
+        self.v_hdrgain.set(r.hdr_gain)
+        for k, *_ in GRADE_SLIDERS:
+            if k in r.grade:
+                self.g_vars[k].set(r.grade[k])
+        self._preset_defaults = r.to_grade()
 
     def _reset_slider(self, key):
         self.g_vars[key].set(getattr(self._preset_defaults, key))

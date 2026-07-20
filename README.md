@@ -129,6 +129,8 @@ python upscale_hdr.py --preview --at 25,95 # at chosen seconds -> output/preview
 
 | flag | default | meaning |
 |------|---------|---------|
+| `--style NAME` | | one-tap look (Vibrant HDR / Cinematic / Natural / Punchy SDR / Sharp Photo / Clean); explicit flags still win |
+| `--recipe FILE` / `--save-recipe FILE` | | load / save a full job recipe (`.json`) |
 | `--scale {2,3,4}` | `2` | upscale factor |
 | `--model {animevideo,x4plus,x4plus-anime}` | `animevideo` | `animevideo` = fast, denoises, best for real video; `x4plus` = sharper photographic detail |
 | `--vibrance {none,subtle,vibrant,max}` | `vibrant` | grade **preset** — the base for the knobs below |
