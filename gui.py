@@ -20,6 +20,7 @@ import json
 import os
 import queue
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -274,6 +275,9 @@ class App:
         self.v_dur = tk.DoubleVar(value=0.0)   # 0 = to end
         self.v_interp = tk.StringVar(value="Off")   # RIFE: Off/2x/3x/4x
         self.v_slowmo = tk.BooleanVar(value=False)
+        self.v_target = tk.StringVar(value="source")
+        self.v_lut = tk.StringVar(value="")
+        self.v_lut.trace_add("write", lambda *_: self._schedule_render() if self._loaded else None)
         self.v_zoom = tk.BooleanVar(value=False)   # 1:1 pixel-peek in preview
         self.v_status = tk.StringVar(value="Ready — choose a video to begin.")
         self.v_elapsed = tk.StringVar(value="")
@@ -439,6 +443,17 @@ class App:
         cbb.pack(side="left", padx=8)
         Tooltip(cbb, "Render every video in input/ sequentially with these settings.")
 
+        num4 = ttk.Frame(opt); num4.grid(row=7, column=0, columnspan=4, sticky="ew", pady=(4, 2))
+        ttk.Label(num4, text="Deliver", style="Muted.TLabel").pack(side="left", padx=(6, 4))
+        cbt = ttk.Combobox(num4, textvariable=self.v_target, state="readonly", width=9,
+                           values=list(recipes.TARGETS))
+        cbt.pack(side="left")
+        Tooltip(cbt, "Delivery target: crop/pad + SDR for social (reel/tiktok/post/x/web).")
+        ttk.Label(num4, text="LUT", style="Muted.TLabel").pack(side="left", padx=(14, 4))
+        ttk.Entry(num4, textvariable=self.v_lut, width=20).pack(side="left")
+        ttk.Button(num4, text="…", width=3, command=self._browse_lut).pack(side="left", padx=(2, 0))
+        ttk.Button(num4, text="✕", width=3, command=lambda: self.v_lut.set("")).pack(side="left")
+
         bar = ttk.Frame(body); bar.grid(row=3, column=0, sticky="ew", pady=(8, 4))
         self.btn_start = ttk.Button(bar, text="▶  Start", style="Accent.TButton", command=self._start)
         self.btn_start.pack(side="left")
@@ -569,6 +584,8 @@ class App:
         self.v_hdrgain.set(r.hdr_gain)
         self.v_interp.set({0: "Off", 2: "2x", 3: "3x", 4: "4x"}.get(r.interpolate, "Off"))
         self.v_slowmo.set(r.slowmo)
+        self.v_target.set(r.target or "source")
+        self.v_lut.set(r.lut or "")
         for k, *_ in GRADE_SLIDERS:
             if k in r.grade:
                 self.g_vars[k].set(r.grade[k])
@@ -658,6 +675,12 @@ class App:
         if f:
             self.out_edited = True
             self.v_out.set(f)
+
+    def _browse_lut(self):
+        f = filedialog.askopenfilename(title="Choose a .cube LUT",
+                                       filetypes=[("Cube LUT", "*.cube"), ("All files", "*.*")])
+        if f:
+            self.v_lut.set(f)
 
     def _on_input_change(self):
         p = self.v_in.get().strip()
@@ -799,7 +822,8 @@ class App:
         self._pgen += 1
         gen = self._pgen
         g = self._current_grade()
-        threading.Thread(target=self._grade_worker, args=(gen, g), daemon=True).start()
+        lut = self.v_lut.get().strip()
+        threading.Thread(target=self._grade_worker, args=(gen, g, lut), daemon=True).start()
 
     def _kick_ai(self):
         if not HAVE_PIL or self._orig is None:
@@ -834,13 +858,23 @@ class App:
         except Exception as e:
             self.q.put(("perror", f"AI upscale error: {e}"))
 
-    def _grade_worker(self, gen, g):
+    def _grade_worker(self, gen, g, lut=""):
         src = self._grade_src or str(PREVIEW_DIR / "src.png")
         out = PREVIEW_DIR / f"g{gen % 3}.png"
-        vf = grade.build_chain(g, out_format="rgb24", working="gbrpf32le")
+        lname, lcwd = "", None
+        if lut and Path(lut).exists():
+            try:
+                dest = tools.APP_CACHE / "lut.cube"
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(lut, dest)
+                lname, lcwd = "lut.cube", str(tools.APP_CACHE)
+            except Exception:
+                pass
+        vf = grade.build_chain(g, out_format="rgb24", working="gbrpf32le", lut=lname)
         try:
             r = subprocess.run([str(FFMPEG), "-y", "-i", str(src), "-vf", vf, str(out)],
-                               creationflags=NOWINDOW, capture_output=True, text=True, timeout=120)
+                               creationflags=NOWINDOW, capture_output=True, text=True,
+                               timeout=120, cwd=lcwd)
             if r.returncode != 0:
                 self.q.put(("perror", f"grade render failed: {r.stderr[-300:]}"))
                 return
@@ -925,6 +959,10 @@ class App:
             cmd += ["--interpolate", str(n)]
             if self.v_slowmo.get():
                 cmd.append("--slowmo")
+        if self.v_target.get() and self.v_target.get() != "source":
+            cmd += ["--target", self.v_target.get()]
+        if self.v_lut.get().strip():
+            cmd += ["--lut", self.v_lut.get().strip()]
         if self.v_tile.get() > 0:
             cmd += ["--tile", str(self.v_tile.get())]
         if self.v_resume.get():
@@ -1162,7 +1200,8 @@ class App:
                  tile=self.v_tile, resume=self.v_resume, keep=self.v_keep, preset=self.v_preset,
                  audio=self.v_audio, open_done=self.v_open, notify=self.v_notify,
                  sleep=self.v_sleep, batch=self.v_batch, trim_start=self.v_start,
-                 trim_dur=self.v_dur, interp=self.v_interp, slowmo=self.v_slowmo)
+                 trim_dur=self.v_dur, interp=self.v_interp, slowmo=self.v_slowmo,
+                 target=self.v_target, lut=self.v_lut)
         for k, *_ in GRADE_SLIDERS:
             m[f"g_{k}"] = self.g_vars[k]
         return m

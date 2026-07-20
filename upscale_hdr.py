@@ -146,7 +146,8 @@ def build_vf(args, info) -> str:
     # shared best-practice grade, in float RGB; leave pixels in that space so
     # the HDR tail (below) can pick up without a round-trip through 8-bit.
     filters.append(grade.build_chain(resolve_grade(args), out_format=None,
-                                     working="gbrpf32le"))
+                                     working="gbrpf32le",
+                                     lut=str(args.lut) if args.lut else ""))
 
     if args.hdr == "on":
         # graded BT.709 (float RGB) -> HDR10 PQ / BT.2020, 10-bit.
@@ -160,6 +161,12 @@ def build_vf(args, info) -> str:
         ]
     else:
         filters.append("format=yuv420p")
+
+    if args.target and args.target != "source":      # crop/pad to the delivery size
+        tf, _ = recipes.target_transform(args.target, info["width"] * args.scale,
+                                         info["height"] * args.scale)
+        if tf:
+            filters.append(tf)
     return ",".join(filters)
 
 
@@ -170,7 +177,8 @@ def make_preview(args, src: Path, info: dict) -> None:
     --upscale: right = AI-upscaled + graded, left = bicubic-upscaled original,
     so you can judge real upscale detail before committing to a full run.
     """
-    grade_vf = grade.build_chain(resolve_grade(args), out_format="rgb24", working="gbrpf32le")
+    grade_vf = grade.build_chain(resolve_grade(args), out_format="rgb24", working="gbrpf32le",
+                                 lut=str(args.lut) if args.lut else "")
     dur = info["duration"]
     if args.at:
         times = [float(x) for x in args.at.split(",") if x.strip()]
@@ -195,10 +203,11 @@ def make_preview(args, src: Path, info: dict) -> None:
             vf = (f"[1:v]scale={tw}:{th}:flags=bicubic,format=rgb24[la];"
                   f"[0:v]{down}{grade_vf}[lg];[la][lg]hstack=inputs=2")
             run([str(FFMPEG), "-y", "-i", str(up), "-i", str(frame),
-                 "-filter_complex", vf, str(out)])
+                 "-filter_complex", vf, str(out)], cwd=getattr(args, "_lut_cwd", None))
         else:
             vf = f"split=2[a][b];[a]format=rgb24[la];[b]{grade_vf}[lg];[la][lg]hstack=inputs=2"
-            run([str(FFMPEG), "-y", "-i", str(frame), "-vf", vf, str(out)])
+            run([str(FFMPEG), "-y", "-i", str(frame), "-vf", vf, str(out)],
+                cwd=getattr(args, "_lut_cwd", None))
         print(f"  {out.name}")
     for tmp in (pdir / "_frame.png", pdir / "_up.png"):   # scrub intermediates
         tmp.unlink(missing_ok=True)
@@ -249,9 +258,9 @@ def encode_cmd(args, info, in_pattern: str, out_fps: str, out_file: Path) -> lis
 _NOWINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
-def run(cmd: list[str], quiet: bool = True) -> None:
+def run(cmd: list[str], quiet: bool = True, cwd=None) -> None:
     r = subprocess.run(cmd, stdout=subprocess.DEVNULL if quiet else None,
-                       stderr=subprocess.PIPE, text=True, creationflags=_NOWINDOW)
+                       stderr=subprocess.PIPE, text=True, creationflags=_NOWINDOW, cwd=cwd)
     if r.returncode != 0:
         die(f"command failed ({cmd[0]}):\n{r.stderr[-2000:]}")
 
@@ -279,6 +288,9 @@ def main() -> None:
     ap.add_argument("--recipe", type=Path, help="load a saved recipe .json")
     ap.add_argument("--save-recipe", type=Path, dest="save_recipe",
                     help="write the effective recipe to .json and continue")
+    ap.add_argument("--target", choices=list(recipes.TARGETS), default="source",
+                    help="delivery target: crop/pad + SDR for social (reel/tiktok/post/x/web)")
+    ap.add_argument("--lut", type=Path, help="apply a 3D LUT (.cube) after the grade")
     ap.add_argument("--vibrance", default="vibrant", choices=list(grade.PRESETS),
                     help="grade preset (base for the --grade knobs below)")
     # per-knob grade overrides (default None -> take the preset's value)
@@ -329,6 +341,10 @@ def main() -> None:
         recipes.apply_to_args(recipes.load(args.recipe), args, given)
     if args.style:
         recipes.apply_to_args(recipes.STYLES[args.style], args, given)
+    if args.target and args.target != "source":     # social targets force SDR
+        th = recipes.target_hdr(args.target)
+        if th and "--hdr" not in given:
+            args.hdr = th
     if args.save_recipe:
         g = resolve_grade(args)
         rc = recipes.Recipe(
@@ -336,9 +352,20 @@ def main() -> None:
             crf=args.crf, preset=args.preset, hdr_gain=args.hdr_gain,
             grade={k: getattr(g, k) for k in recipes.GRADE_KNOBS},
             trim_start=args.start, trim_dur=args.duration or 0.0, audio=not args.no_audio,
-            interpolate=args.interpolate, slowmo=args.slowmo)
+            interpolate=args.interpolate, slowmo=args.slowmo,
+            lut=str(args.lut) if args.lut else "", target=args.target)
         recipes.save(rc, args.save_recipe)
         print(f"[recipe] saved -> {args.save_recipe}")
+
+    # LUT: copy to a no-space cache and reference by bare name (ffmpeg's
+    # filtergraph parser can't handle the Windows drive-colon in a path).
+    args._lut_cwd = None
+    if args.lut:
+        dest = tools.APP_CACHE / "lut.cube"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(args.lut, dest)
+        args.lut = "lut.cube"
+        args._lut_cwd = str(tools.APP_CACHE)
 
     check_deps()
 
@@ -405,6 +432,11 @@ def main() -> None:
     if args.interpolate and args.interpolate > 1:
         print(f"  interpolate {args.interpolate}x RIFE "
               f"({'slow-mo' if args.slowmo else 'smooth'})")
+    if args.lut:
+        print(f"  lut         {Path(args.lut).name}")
+    if args.target and args.target != "source":
+        _, (dw, dh) = recipes.target_transform(args.target, tw, th)
+        print(f"  deliver     {args.target}  {dw}x{dh}")
     style_s = f"style={args.style}  " if args.style else ""
     print(f"  grade       {args.hdr.upper()}  {style_s}encoder={args.encoder}  crf={args.crf}")
     if args.start or args.duration:
@@ -493,7 +525,7 @@ def main() -> None:
         except stages.StageError as e:
             die(str(e))
         pattern = normalize_seq(cur)
-        run(encode_cmd(args, info, pattern, out_fps, seg))
+        run(encode_cmd(args, info, pattern, out_fps, seg), cwd=args._lut_cwd)
         shutil.rmtree(cur, ignore_errors=True)
 
         done_frames += count
