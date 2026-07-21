@@ -1,0 +1,13 @@
+# Install runtime dependencies first.
+-r requirements.txt
+
+# Test runner and coverage reporting.
+pytest>=8.3,<9
+pytest-cov>=6,<7
+
+# Linting and formatting.
+ruff>=0.12,<1
+
+# Static type checking.
+mypy>=1.16,<2
+types-Pillow>=10.2
