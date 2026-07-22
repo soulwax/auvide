@@ -1,8 +1,9 @@
 // auvide desktop — thin Rust backend over the Python engine.
 // The pipeline is NOT reimplemented here: we build a recipe in the frontend,
-// hand it to upscale_hdr.py, and stream its progress back as events.
+// hand it to the auvide.cli engine (via `uv run -m auvide.cli`), and stream
+// its progress back as events.
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -13,22 +14,40 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[derive(Default, Clone)]
 struct RenderState(Arc<Mutex<Option<u32>>>); // pid of the running engine, if any
 
-/// Locate the bundled Python engine (dev: alongside the crate; bundled: resources).
+/// Locate the auvide engine package (dev: the monorepo's `engine/` dir, staged
+/// into `src-tauri/engine/` by `beforeDevCommand`/`beforeBuildCommand`; bundled:
+/// the same staged copy shipped as a Tauri resource). Only one copy of the
+/// engine source exists in the repo — `../engine` — this just finds wherever
+/// it landed for this run.
 fn engine_dir(app: &AppHandle) -> PathBuf {
     if let Ok(res) = app.path().resource_dir() {
         let e = res.join("engine");
-        if e.join("upscale_hdr.py").exists() {
+        if e.join("pyproject.toml").exists() {
             return e;
         }
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("engine")
+    // dev: staged copy beside the crate (see package.json's `stage-engine` script)
+    let staged = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("engine");
+    if staged.join("pyproject.toml").exists() {
+        return staged;
+    }
+    // fallback: the monorepo engine/ directly (e.g. `cargo check` without a bun build)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../engine")
 }
 
-fn uv_cmd(engine: &PathBuf) -> Command {
-    // uv provides Python + deps without touching the OneDrive .venv lock.
+fn uv_cmd(engine: &Path) -> Command {
+    // uv provides Python + the auvide package (installed from `engine`) without
+    // touching a system Python or an OneDrive-synced .venv.
     let mut c = Command::new("uv");
-    c.args(["run", "--no-project", "--python", "3.12"]);
-    c.current_dir(engine);
+    c.args([
+        "run",
+        "--project",
+        &engine.to_string_lossy(),
+        "--python",
+        "3.12",
+        "-m",
+        "auvide.cli",
+    ]);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -42,7 +61,6 @@ fn uv_cmd(engine: &PathBuf) -> Command {
 fn config(app: AppHandle) -> Result<serde_json::Value, String> {
     let engine = engine_dir(&app);
     let out = uv_cmd(&engine)
-        .arg(engine.join("upscale_hdr.py"))
         .arg("--dump-config")
         .output()
         .map_err(|e| format!("failed to run engine (is `uv` on PATH?): {e}"))?;
@@ -65,12 +83,14 @@ fn run_render(
         return Err("a render is already running".into());
     }
     let engine = engine_dir(&app);
-    let recipe_path = std::env::temp_dir().join("auvide_recipe.json");
+    // unique per-run filename: a fixed name would collide if two renders (or
+    // two app instances) raced to write it before the child process reads it.
+    let recipe_path =
+        std::env::temp_dir().join(format!("auvide_recipe_{}.json", std::process::id()));
     std::fs::write(&recipe_path, serde_json::to_vec_pretty(&recipe).unwrap())
         .map_err(|e| e.to_string())?;
 
     let mut child = uv_cmd(&engine)
-        .arg(engine.join("upscale_hdr.py"))
         .arg(&input)
         .args(["-o", &output])
         .arg("--recipe")
@@ -103,6 +123,7 @@ fn run_render(
     std::thread::spawn(move || {
         let code = child.wait().ok().and_then(|s| s.code()).unwrap_or(-1);
         *st.lock().unwrap() = None;
+        let _ = std::fs::remove_file(&recipe_path);
         let _ = a.emit("render:done", code);
     });
     Ok(())

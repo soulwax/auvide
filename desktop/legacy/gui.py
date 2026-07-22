@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
-"""auvide GUI - desktop front-end over upscale_hdr.py with a live grade preview.
+"""auvide GUI - desktop front-end over the auvide.cli engine with a live grade preview.
 
 Two tabs:
   * Render        - pick a file, set scale/model/HDR/encoder, Start; streams the
                     CLI log and shows a progress bar.
   * Grade & Preview - load one frame and dial in the color grade with sliders,
                     seeing a real before/after (draggable wipe). The exact grade
-                    is shared with the render (via grade.py), so what you tune is
-                    what you get.
+                    is shared with the render (via auvide.grade), so what you
+                    tune is what you get.
 
 The preview grades the SOURCE frame (color is resolution-independent), so slider
 drags are snappy — no per-change upscaling.
 
-Run:  uv run --python 3.12 --with pillow gui.py   (or double-click run-gui.bat)
+Run (from desktop/):  uv run --python 3.12 --with ../engine --with pillow legacy/gui.py
+                       (or double-click run-gui.bat)
+
+Legacy: this is the original Tkinter front-end, kept for reference and for
+users who prefer a no-frills window. The Tauri desktop app (see ../src/) is
+the actively developed GUI going forward; this file gets no new features.
 """
 from __future__ import annotations
 
@@ -30,9 +35,9 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
-import grade
-import recipe as recipes
-import tools
+from auvide import grade
+from auvide import recipe as recipes
+from auvide import tools
 
 try:
     from PIL import Image, ImageTk, ImageDraw
@@ -40,8 +45,7 @@ try:
 except Exception:
     HAVE_PIL = False
 
-HERE = Path(__file__).resolve().parent
-CLI = HERE / "upscale_hdr.py"
+HERE = Path.cwd()  # not __file__'s dir: run from the project root, not legacy/
 FFMPEG = tools.ffmpeg()
 FFPROBE = tools.ffprobe()
 CONFIG = Path(os.environ.get("LOCALAPPDATA", HERE)) / "auvide" / "gui.json"
@@ -1041,7 +1045,7 @@ class App:
     # ---- command / run --------------------------------------------------
     def _build_command(self):
         g = self._current_grade()
-        cmd = [sys.executable, "-u", str(CLI), self.v_in.get(), "-o", self.v_out.get(),
+        cmd = [sys.executable, "-u", "-m", "auvide.cli", self.v_in.get(), "-o", self.v_out.get(),
                "--scale", self.v_scale.get(), "--model", self.v_model.get(),
                "--hdr", self.v_hdr.get(), "--encoder", self.v_enc.get(),
                "--crf", str(self.v_crf.get()), "--chunk", str(self.v_chunk.get()),
@@ -1118,8 +1122,11 @@ class App:
             messagebox.showerror("auvide", "Input video not found.")
             self._reset_buttons()
             return
-        if not CLI.exists():
-            messagebox.showerror("auvide", f"Cannot find upscale_hdr.py at {CLI}")
+        try:
+            import auvide  # noqa: F401  (import-only check: is the engine installed?)
+        except ImportError:
+            messagebox.showerror("auvide", "The auvide engine is not installed in this "
+                                            "Python environment (pip install auvide).")
             self._reset_buttons()
             return
         self.out_edited = False

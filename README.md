@@ -49,22 +49,30 @@ them; on other OSes drop the model files there, or install a realesrgan build
 that ships models beside its binary. auvide checks all of this up front and
 prints exactly what's missing.
 
-Then the Python dep (for the GUI's live preview): `pip install -r requirements.txt`
-(only Pillow; everything else is stdlib). `pyproject.toml` also exposes `auvide` /
-`auvide-gui` console scripts via `pip install .`.
+Then install the engine package (only Pillow as a real dependency; everything
+else is stdlib): `pip install ./engine` (or, from a checkout, `pip install -e
+./engine` for development). This exposes the `auvide` console script and the
+`auvide` importable package. `uv` users can skip the install and run directly:
+`uv run --project ./engine --python 3.12 -m auvide.cli ...`.
 
 ## Project layout
 
 ```
+engine/   <- the auvide Python package (src/auvide/) — the ONLY copy of the
+             engine source; CLI, legacy GUI, and the Tauri app all import it
+desktop/  <- Tauri 2 desktop app (Vite/TypeScript frontend + Rust backend);
+             stages a build-time copy of engine/ into desktop/src-tauri/engine/
+desktop/legacy/gui.py  <- the Tkinter GUI, kept for reference — no new
+                          features land here; the Tauri app is the actively
+                          developed GUI
 input/    <- put source videos here (CLI/GUI auto-pick a lone video)
 output/   <- renders land here
-legacy/   <- the earlier standalone vibrant_upscale.py, kept for reference
 ```
 
 Binaries are **not** here — they live on your PATH (see Setup).
 
-With one video in `input/`, just run `python upscale_hdr.py` — no arguments
-needed. The GUI auto-loads it too.
+With one video in `input/`, just run `auvide` — no arguments needed. The GUI
+auto-loads it too.
 
 ---
 
@@ -72,35 +80,48 @@ needed. The GUI auto-loads it too.
 
 ```powershell
 # defaults: 2x, animevideo model, vibrant HDR10
-python upscale_hdr.py "movie.mp4"
+auvide "movie.mp4"
 
 # explicit
-python upscale_hdr.py "movie.mp4" -o "movie_hdr.mp4" --scale 2 --vibrance vibrant
+auvide "movie.mp4" -o "movie_hdr.mp4" --scale 2 --vibrance vibrant
 
 # sharper photographic model (4x native, slower, more VRAM)
-python upscale_hdr.py "movie.mp4" --model x4plus --scale 2
+auvide "movie.mp4" --model x4plus --scale 2
 
 # stay SDR, just upscale
-python upscale_hdr.py "movie.mp4" --hdr off
+auvide "movie.mp4" --hdr off
 
 # resume an interrupted run
-python upscale_hdr.py "movie.mp4" --resume
+auvide "movie.mp4" --resume
 ```
 
-Or drag a video file onto **`run.bat`** to process it with defaults.
+Or drag a video file onto **`desktop/run.bat`** to process it with defaults.
 
-### GUI
+### Desktop app
 
-A desktop front-end is included. It's a thin wrapper — it collects options,
-launches the same `upscale_hdr.py` engine as a subprocess, streams its log, and
-shows a progress bar driven by the CLI's per-chunk output.
+The actively developed GUI is a Tauri 2 desktop app in `desktop/` (Vite +
+TypeScript frontend, Rust backend). It's a thin wrapper — it collects options,
+launches the `auvide` engine as a subprocess, streams its log, and shows a
+progress bar driven by the CLI's per-chunk output.
+
+```powershell
+cd desktop
+bun install
+bun run tauri dev
+```
+
+### Legacy GUI
+
+The original Tkinter front-end (`desktop/legacy/gui.py`) still works and gets
+no new features — the Tauri app above is the one to use going forward.
 
 ```powershell
 # uv provides Python + tkinter + pillow (no system Python needed)
-uv run --python 3.12 --with pillow gui.py
+cd desktop
+uv run --python 3.12 --with ./../engine --with pillow legacy/gui.py
 ```
 
-Or double-click **`run-gui.bat`**. Two tabs:
+Or double-click **`desktop/run-gui.bat`**. Two tabs:
 
 - **Render** — pick an input, set scale / model / HDR / encoder, hit **Start**.
   "Show command" prints the equivalent CLI; **Cancel** stops the run (re-launch
@@ -123,8 +144,8 @@ Or double-click **`run-gui.bat`**. Two tabs:
 No GUI? Get the same comparison from the CLI without a full run:
 
 ```powershell
-python upscale_hdr.py --preview            # before/after stills at 20/50/80%
-python upscale_hdr.py --preview --at 25,95 # at chosen seconds -> output/preview/
+auvide --preview            # before/after stills at 20/50/80%
+auvide --preview --at 25,95 # at chosen seconds -> output/preview/
 ```
 
 ### Options
@@ -188,7 +209,8 @@ The `x4plus` model is sharper but slower and needs more VRAM.
 
 ## Roadmap
 
-- ✅ **GUI front-end** — `gui.py`, a Tkinter window over the CLI.
+- ✅ **GUI front-end** — first `legacy/gui.py` (Tkinter), now a Tauri 2 desktop
+  app (`desktop/`) over the same CLI engine.
 - ✅ **Live grade preview** — before/after wipe + sliders, shared with the render.
 - ✅ **AI upscale preview** (1:1 pixel-peek), **saved presets**, **trim**, **batch**,
   **notify/sleep-when-done**, **accent themes**.
@@ -198,7 +220,9 @@ The `x4plus` model is sharper but slower and needs more VRAM.
   (waveform + vectorscope) in the preview.
 - **Face restoration** (GFPGAN/CodeFormer) — needs a torch model, not yet packaged.
 - **Curves editor** (the 8 grade sliders + LUTs already cover most of this).
-- **Standalone `.exe`** — package with PyInstaller for double-click use.
+- **`auvide` on PyPI** — `pip install auvide` / `uv tool install auvide`.
+- **Signed, self-updating desktop installers** with a first-run setup screen
+  that fetches ffmpeg/Real-ESRGAN — see `docs/MASTERPLAN.md`.
 
 ## Credits
 

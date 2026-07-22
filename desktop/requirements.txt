@@ -1,9 +1,14 @@
-# auvide runtime dependencies (Python packages only).
+# auvide runtime dependencies for the legacy Tkinter GUI (../legacy/gui.py).
 #
+# The engine itself is a separate installable package — see ../engine/pyproject.toml.
 # The heavy binaries — ffmpeg, ffprobe, realesrgan-ncnn-vulkan + models — are
-# NOT pip packages; provision them into ./bin with:  powershell -File setup.ps1
+# NOT pip packages; provision them with:  powershell -File setup.ps1
 #
-# Install:  pip install -r requirements.txt      (or: uv pip install -r requirements.txt)
+# Install:  pip install -r requirements.txt -e ../engine
+#   (or just use run-gui.bat, which does this via `uv run` automatically)
+
+# The engine package (grade/recipe/tools) that gui.py imports.
+-e ../engine
 
 # Live before/after grade preview in the GUI (image load/resize/composite).
 pillow>=10.0

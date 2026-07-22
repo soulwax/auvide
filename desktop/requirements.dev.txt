@@ -1,13 +1,9 @@
-# Install runtime dependencies first.
--r requirements.txt
+# Dev tooling for the auvide engine (pytest, ruff, mypy) plus the legacy GUI's
+# runtime deps. The dev extra is declared once in ../engine/pyproject.toml —
+# this file just pulls it in so `pip install -r requirements.dev.txt` still
+# works from this directory.
+#
+# Install:  pip install -r requirements.dev.txt
 
-# Test runner and coverage reporting.
-pytest>=8.3,<9
-pytest-cov>=6,<7
-
-# Linting and formatting.
-ruff>=0.12,<1
-
-# Static type checking.
-mypy>=1.16,<2
-types-Pillow>=10.2
+-e ../engine[dev]
+pillow>=10.0

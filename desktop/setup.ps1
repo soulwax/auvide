@@ -49,4 +49,4 @@ foreach ($t in "ffmpeg", "ffprobe", "realesrgan-ncnn-vulkan") {
     Write-Host ("  {0,-24} {1}" -f $t, $(if ($c) { $c.Source } else { "MISSING" }))
 }
 Write-Host ""
-Write-Host "Run it:  uv run --python 3.12 --with pillow gui.py"
+Write-Host "Run it:  run.bat (CLI) or run-gui.bat (legacy GUI), or: bun run tauri dev"

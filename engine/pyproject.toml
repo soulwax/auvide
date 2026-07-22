@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "auvide"
+version = "0.2.0"
+description = "AI video upscaler + vibrant HDR10 remapper, with a live grade-preview GUI."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "soulwax" }]
+keywords = ["video", "upscale", "hdr", "real-esrgan", "ffmpeg", "color-grade"]
+
+# Python deps only. The ffmpeg / realesrgan binaries live on PATH (see setup.ps1
+# and README) — auvide does not bundle them.
+dependencies = [
+    "pillow>=10.0",
+]
+
+[project.optional-dependencies]
+dnd = ["tkinterdnd2>=0.4"]
+dev = [
+    "pytest>=8.3,<9",
+    "pytest-cov>=6,<7",
+    "ruff>=0.12,<1",
+    "mypy>=1.16,<2",
+    "types-Pillow>=10.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/soulwax/auvide"
+
+[project.scripts]
+auvide = "auvide.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.mypy]
+python_version = "3.9"
+ignore_missing_imports = true
