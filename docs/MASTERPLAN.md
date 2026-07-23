@@ -1,6 +1,6 @@
 # auvide — Technical Masterplan: from working prototype to a respectable package
 
-Status: Phase 1 done, Phase 2 mostly done · Date: 2026-07-22 · Scope: whole repository (Python engine, Tauri desktop app, legacy Tkinter GUI)
+Status: Phase 1 done, Phase 2 done · Date: 2026-07-22 · Scope: whole repository (Python engine, Tauri desktop app, legacy Tkinter GUI)
 
 **Progress so far** (see git history from 2026-07-22 onward):
 - ✅ **Phase 1** — engine consolidated to `engine/src/auvide/` (one copy, was three); root/desktop
@@ -8,13 +8,15 @@ Status: Phase 1 done, Phase 2 mostly done · Date: 2026-07-22 · Scope: whole re
   (removed `pnpm-lock.yaml`/`pnpm-workspace.yaml`); desktop app now stages the engine at
   build time (`desktop/scripts/stage-engine.mjs`) instead of keeping a second tracked copy;
   version drift fixed (0.2.0 everywhere); `AGENTS.md`/`README.md` updated to match.
-- 🟡 **Phase 2** — pytest suite added (80 tests: unit tests for `recipe`/`grade`/`tools`/`stages`,
+- ✅ **Phase 2** — pytest suite added (80 tests: unit tests for `recipe`/`grade`/`tools`/`stages`,
   plus a real ffmpeg-based integration test that renders a synthetic clip through the full
   pipeline with a stubbed upscaler and verifies HDR10 output via ffprobe); ruff + mypy clean;
   `cargo fmt`/`clippy -D warnings`/`cargo check` clean; CI workflow added
-  (`.github/workflows/ci.yml`, matrix across ubuntu/windows/macos). Not yet done: `ruff format`
-  is not enforced (the codebase's existing dense/aligned style predates it and a mass reformat
-  wasn't in scope); no generated `recipe.d.ts` yet (`main.ts` still has `type Recipe = any`).
+  (`.github/workflows/ci.yml`, matrix across ubuntu/windows/macos); `main.ts`'s `type Recipe =
+  any` replaced with a hand-written `Recipe`/`GradeKnobs` interface mirroring
+  `recipe.py`'s `Recipe` dataclass field-for-field, `tsc --noEmit` and `bun run build` both
+  clean. Not enforced: `ruff format` (the codebase's existing dense/aligned style predates it
+  and a mass reformat wasn't in scope — a deliberate call, revisit if it becomes a pain point).
   The integration test caught and fixed a **real pre-existing bug**: the HDR filter chain's
   `zscale=...t=linear` step failed with "no path between colorspaces" on some ffmpeg/zimg
   builds because the extracted-frame PNG input carried no colorspace tags — fixed by tagging
