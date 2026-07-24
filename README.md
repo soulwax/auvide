@@ -105,7 +105,8 @@ launches the `auvide` engine as a subprocess, streams its log, and shows a
 progress bar driven by the CLI's per-chunk output.
 
 ```powershell
-# From the repository root: checks Bun, Rust, uv, and dependencies, then opens the GUI.
+# From the repository root: checks Bun/Rust, prepares dependencies and the
+# verified uv sidecar, then opens the GUI. No global Python or uv is required.
 .\run-gui.bat
 
 # Or, from desktop/: .\run-desktop.bat

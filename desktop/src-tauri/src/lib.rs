@@ -1,6 +1,6 @@
 // auvide desktop — thin Rust backend over the Python engine.
 // The pipeline is NOT reimplemented here: we build a recipe in the frontend,
-// hand it to the auvide.cli engine (via `uv run -m auvide.cli`), and stream
+// hand it to the auvide.cli engine (via the bundled `uv` sidecar), and stream
 // its progress back as events.
 pub mod paths;
 pub mod protocol;
@@ -39,10 +39,44 @@ fn engine_dir(app: &AppHandle) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../engine")
 }
 
-fn uv_cmd(engine: &Path) -> Command {
-    // uv provides Python + the auvide package (installed from `engine`) without
-    // touching a system Python or an OneDrive-synced .venv.
-    let mut c = Command::new("uv");
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+const UV_SIDECAR_NAME: &str = "uv-x86_64-pc-windows-msvc.exe";
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const UV_SIDECAR_NAME: &str = "uv-x86_64-apple-darwin";
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const UV_SIDECAR_NAME: &str = "uv-aarch64-apple-darwin";
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const UV_SIDECAR_NAME: &str = "uv-x86_64-unknown-linux-gnu";
+#[cfg(not(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", target_arch = "x86_64")
+)))]
+const UV_SIDECAR_NAME: &str = "";
+
+fn uv_sidecar_path(app: &AppHandle) -> Result<PathBuf, String> {
+    if UV_SIDECAR_NAME.is_empty() {
+        return Err("no bundled uv sidecar exists for this platform".into());
+    }
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("binaries")
+        .join(UV_SIDECAR_NAME);
+    let mut candidates = vec![dev];
+    if let Ok(resources) = app.path().resource_dir() {
+        candidates.push(resources.join("binaries").join(UV_SIDECAR_NAME));
+        candidates.push(resources.join(UV_SIDECAR_NAME));
+    }
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| format!("bundled uv sidecar is unavailable: {UV_SIDECAR_NAME}"))
+}
+
+fn uv_cmd(app: &AppHandle, engine: &Path) -> Result<Command, String> {
+    // The sidecar provides Python + the auvide package without relying on a
+    // system uv/Python installation or an OneDrive-synced project environment.
+    let mut c = Command::new(uv_sidecar_path(app)?);
     c.args([
         "run",
         "--project",
@@ -57,14 +91,14 @@ fn uv_cmd(engine: &Path) -> Command {
         use std::os::windows::process::CommandExt;
         c.creation_flags(CREATE_NO_WINDOW);
     }
-    c
+    Ok(c)
 }
 
 /// Styles / targets / knobs, straight from recipe.py (single source of truth).
 #[tauri::command]
 fn config(app: AppHandle) -> Result<serde_json::Value, String> {
     let engine = engine_dir(&app);
-    let out = uv_cmd(&engine)
+    let out = uv_cmd(&app, &engine)?
         .arg("--dump-config")
         .output()
         .map_err(|e| format!("failed to run engine (is `uv` on PATH?): {e}"))?;
@@ -94,7 +128,7 @@ fn run_render(
     std::fs::write(&recipe_path, serde_json::to_vec_pretty(&recipe).unwrap())
         .map_err(|e| e.to_string())?;
 
-    let mut child = uv_cmd(&engine)
+    let mut child = uv_cmd(&app, &engine)?
         .arg(&input)
         .args(["-o", &output])
         .arg("--recipe")
@@ -131,6 +165,17 @@ fn run_render(
         let _ = a.emit("render:done", code);
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UV_SIDECAR_NAME;
+
+    #[test]
+    fn supported_targets_have_a_target_named_uv_sidecar() {
+        assert!(!UV_SIDECAR_NAME.is_empty());
+        assert!(UV_SIDECAR_NAME.starts_with("uv-"));
+    }
 }
 
 #[tauri::command]

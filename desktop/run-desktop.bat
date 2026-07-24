@@ -17,21 +17,18 @@ if errorlevel 1 (
   goto :fail
 )
 
-where uv >nul 2>&1
-if errorlevel 1 (
-  echo [error] uv was not found on PATH. Install it with: winget install --id astral-sh.uv
-  echo         The managed runtime bootstrap is still being integrated; the current GUI needs uv for renders.
-  goto :fail
-)
-
 if not exist "node_modules\@tauri-apps\cli" (
   echo [auvide] Installing desktop dependencies...
   call bun install --frozen-lockfile
   if errorlevel 1 goto :fail
 )
 
+echo [auvide] Preparing the verified uv sidecar...
+call bun run stage-uv-sidecar
+if errorlevel 1 goto :fail
+
 if /i "%~1"=="--check" (
-  echo [auvide] Desktop development prerequisites are ready.
+  echo [auvide] Desktop development prerequisites and uv sidecar are ready.
   popd >nul
   exit /b 0
 )

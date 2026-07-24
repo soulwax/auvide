@@ -24,6 +24,8 @@ and uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Atomic, recoverable desktop runtime state persistence with installed-package
   metadata.
 - A one-command modern desktop launcher with development prerequisite checks.
+- Desktop engine commands now use the verified bundled `uv` sidecar instead
+  of requiring a globally installed `uv` executable.
 
 ### Changed
 
