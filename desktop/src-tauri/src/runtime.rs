@@ -1,6 +1,8 @@
 //! Serializable state transitions for the desktop-managed Python runtime.
 
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +25,7 @@ pub struct RuntimeState {
     pub engine_version: String,
     pub python_version: Option<String>,
     pub venv_path: Option<PathBuf>,
+    pub installed_packages: BTreeMap<String, String>,
     pub detail: Option<String>,
 }
 
@@ -34,6 +37,7 @@ impl RuntimeState {
             engine_version: engine_version.into(),
             python_version: None,
             venv_path: None,
+            installed_packages: BTreeMap::new(),
             detail: None,
         }
     }
@@ -49,7 +53,65 @@ impl RuntimeState {
             engine_version: engine_version.into(),
             python_version: Some(python_version.into()),
             venv_path: Some(venv_path),
+            installed_packages: BTreeMap::new(),
             detail: None,
+        }
+    }
+
+    pub fn with_package(mut self, name: impl Into<String>, version: impl Into<String>) -> Self {
+        self.installed_packages.insert(name.into(), version.into());
+        self
+    }
+
+    pub fn load(path: &Path, engine_version: impl Into<String>) -> Self {
+        let engine_version = engine_version.into();
+        match fs::read_to_string(path) {
+            Ok(contents) => match serde_json::from_str(&contents) {
+                Ok(state) => state,
+                Err(error) => {
+                    Self::broken(engine_version, format!("invalid runtime state: {error}"))
+                }
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Self::missing(engine_version)
+            }
+            Err(error) => Self::broken(
+                engine_version,
+                format!("could not read runtime state: {error}"),
+            ),
+        }
+    }
+
+    pub fn save_atomic(&self, path: &Path) -> Result<(), String> {
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("runtime state path has no parent: {}", path.display()))?;
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
+        let temporary = parent.join(format!(
+            ".{}.{}.tmp",
+            path.file_name().unwrap_or_default().to_string_lossy(),
+            std::process::id()
+        ));
+        let data = serde_json::to_vec_pretty(self)
+            .map_err(|error| format!("could not serialize runtime state: {error}"))?;
+        fs::write(&temporary, data)
+            .map_err(|error| format!("could not write {}: {error}", temporary.display()))?;
+        fs::rename(&temporary, path).map_err(|error| {
+            let _ = fs::remove_file(&temporary);
+            format!("could not replace {}: {error}", path.display())
+        })
+    }
+
+    fn broken(engine_version: String, detail: String) -> Self {
+        Self {
+            schema_version: STATE_SCHEMA_VERSION,
+            status: RuntimeStatus::Broken,
+            engine_version,
+            python_version: None,
+            venv_path: None,
+            installed_packages: BTreeMap::new(),
+            detail: Some(detail),
         }
     }
 
@@ -85,7 +147,18 @@ pub enum RuntimeHealth {
 #[cfg(test)]
 mod tests {
     use super::{RuntimeHealth, RuntimeState, RuntimeStatus, STATE_SCHEMA_VERSION};
+    use std::fs;
     use std::path::PathBuf;
+
+    fn temporary_state_path(name: &str) -> PathBuf {
+        std::env::temp_dir()
+            .join(format!(
+                "auvide-runtime-test-{}-{}",
+                std::process::id(),
+                name
+            ))
+            .join("state.json")
+    }
 
     #[test]
     fn missing_runtime_is_not_ready() {
@@ -117,5 +190,40 @@ mod tests {
         state.status = RuntimeStatus::Ready;
 
         assert_eq!(state.health("0.2.0"), RuntimeHealth::Broken);
+    }
+
+    #[test]
+    fn persists_and_recovers_a_complete_runtime_state() {
+        let path = temporary_state_path("round-trip");
+        let state = RuntimeState::ready("0.2.0", "3.12.0", PathBuf::from("runtime/venv"))
+            .with_package("Pillow", "11.3.0");
+
+        state.save_atomic(&path).unwrap();
+        let recovered = RuntimeState::load(&path, "0.2.0");
+
+        assert_eq!(recovered, state);
+        assert_eq!(
+            recovered.installed_packages.get("Pillow"),
+            Some(&"11.3.0".into())
+        );
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn missing_or_corrupt_state_is_recoverable() {
+        let missing = temporary_state_path("missing");
+        assert_eq!(
+            RuntimeState::load(&missing, "0.2.0").status,
+            RuntimeStatus::Missing
+        );
+
+        let corrupt = temporary_state_path("corrupt");
+        fs::create_dir_all(corrupt.parent().unwrap()).unwrap();
+        fs::write(&corrupt, "not json").unwrap();
+        let state = RuntimeState::load(&corrupt, "0.2.0");
+
+        assert_eq!(state.status, RuntimeStatus::Broken);
+        assert!(state.detail.unwrap().contains("invalid runtime state"));
+        fs::remove_dir_all(corrupt.parent().unwrap()).unwrap();
     }
 }

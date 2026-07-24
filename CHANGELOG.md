@@ -21,6 +21,8 @@ and uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   setup documentation.
 - A pinned, SHA256-verified `uv` sidecar staging path for supported desktop
   targets.
+- Atomic, recoverable desktop runtime state persistence with installed-package
+  metadata.
 
 ### Changed
 
