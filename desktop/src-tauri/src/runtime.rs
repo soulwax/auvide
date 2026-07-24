@@ -3,10 +3,15 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
+use crate::paths::AppPaths;
+
 pub const STATE_SCHEMA_VERSION: u32 = 1;
+pub const PYTHON_VERSION: &str = "3.12";
+pub const PILLOW_VERSION: &str = "11.3.0";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -144,9 +149,140 @@ pub enum RuntimeHealth {
     UpgradeRequired,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandSpec {
+    pub program: PathBuf,
+    pub arguments: Vec<String>,
+    pub environment: BTreeMap<String, String>,
+}
+
+pub fn install_commands(
+    paths: &AppPaths,
+    uv_sidecar: &Path,
+    engine_dir: &Path,
+) -> Vec<CommandSpec> {
+    let environment = BTreeMap::from([
+        (
+            "UV_PYTHON_INSTALL_DIR".into(),
+            paths.runtime_python_dir().display().to_string(),
+        ),
+        (
+            "UV_CACHE_DIR".into(),
+            paths.app_cache().join("uv").display().to_string(),
+        ),
+        ("UV_PYTHON_NO_REGISTRY".into(), "1".into()),
+    ]);
+    vec![
+        CommandSpec {
+            program: uv_sidecar.to_path_buf(),
+            arguments: vec![
+                "python".into(),
+                "install".into(),
+                PYTHON_VERSION.into(),
+                "--no-bin".into(),
+            ],
+            environment: environment.clone(),
+        },
+        CommandSpec {
+            program: uv_sidecar.to_path_buf(),
+            arguments: vec![
+                "venv".into(),
+                "--python".into(),
+                PYTHON_VERSION.into(),
+                "--managed-python".into(),
+                paths.runtime_venv_dir().display().to_string(),
+            ],
+            environment: environment.clone(),
+        },
+        CommandSpec {
+            program: uv_sidecar.to_path_buf(),
+            arguments: vec![
+                "pip".into(),
+                "install".into(),
+                "--python".into(),
+                paths.runtime_python_executable().display().to_string(),
+                "--upgrade".into(),
+                engine_dir.display().to_string(),
+                format!("Pillow=={PILLOW_VERSION}"),
+            ],
+            environment,
+        },
+    ]
+}
+
+pub fn ensure_runtime(
+    paths: &AppPaths,
+    uv_sidecar: &Path,
+    engine_dir: &Path,
+    engine_version: &str,
+) -> Result<PathBuf, String> {
+    paths.ensure_base_directories()?;
+    let state_path = paths.runtime_state_path();
+    let state = RuntimeState::load(&state_path, engine_version);
+    let python = paths.runtime_python_executable();
+    if state.health(engine_version) == RuntimeHealth::Ready && python.is_file() {
+        return Ok(python);
+    }
+
+    let lock = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(paths.runtime_lock_path())
+        .map_err(|error| {
+            format!("runtime installation is already in progress or unavailable: {error}")
+        })?;
+    drop(lock);
+
+    let result = (|| {
+        RuntimeState {
+            status: RuntimeStatus::Installing,
+            ..RuntimeState::missing(engine_version)
+        }
+        .save_atomic(&state_path)?;
+
+        for command in install_commands(paths, uv_sidecar, engine_dir) {
+            run_command(&command)?;
+        }
+        if !python.is_file() {
+            return Err(format!("runtime setup did not create {}", python.display()));
+        }
+        RuntimeState::ready(engine_version, PYTHON_VERSION, paths.runtime_venv_dir())
+            .with_package("auvide", engine_version)
+            .with_package("Pillow", PILLOW_VERSION)
+            .save_atomic(&state_path)?;
+        Ok(python)
+    })();
+
+    let _ = fs::remove_file(paths.runtime_lock_path());
+    if let Err(error) = &result {
+        RuntimeState::broken(engine_version.into(), error.clone()).save_atomic(&state_path)?;
+    }
+    result
+}
+
+fn run_command(spec: &CommandSpec) -> Result<(), String> {
+    let output = Command::new(&spec.program)
+        .args(&spec.arguments)
+        .envs(&spec.environment)
+        .output()
+        .map_err(|error| format!("could not run {}: {error}", spec.program.display()))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "{} failed: {}",
+        spec.program.display(),
+        String::from_utf8_lossy(&output.stderr).trim()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeHealth, RuntimeState, RuntimeStatus, STATE_SCHEMA_VERSION};
+    use super::{
+        install_commands, RuntimeHealth, RuntimeState, RuntimeStatus, PILLOW_VERSION,
+        PYTHON_VERSION, STATE_SCHEMA_VERSION,
+    };
+    use crate::paths::AppPaths;
     use std::fs;
     use std::path::PathBuf;
 
@@ -225,5 +361,33 @@ mod tests {
         assert_eq!(state.status, RuntimeStatus::Broken);
         assert!(state.detail.unwrap().contains("invalid runtime state"));
         fs::remove_dir_all(corrupt.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn install_commands_keep_python_and_cache_under_app_owned_paths() {
+        let paths = AppPaths::from_roots(PathBuf::from("app-data"), PathBuf::from("app-cache"));
+        let commands = install_commands(
+            &paths,
+            PathBuf::from("uv").as_path(),
+            PathBuf::from("engine").as_path(),
+        );
+
+        assert_eq!(commands.len(), 3);
+        assert!(commands[0].arguments.contains(&PYTHON_VERSION.into()));
+        assert!(commands[1].arguments.contains(&"--managed-python".into()));
+        assert!(commands[2]
+            .arguments
+            .contains(&format!("Pillow=={PILLOW_VERSION}")));
+        assert_eq!(
+            commands[0].environment["UV_PYTHON_INSTALL_DIR"],
+            paths.runtime_python_dir().display().to_string()
+        );
+        assert_eq!(
+            commands[0].environment["UV_CACHE_DIR"],
+            paths.app_cache().join("uv").display().to_string()
+        );
+        assert!(commands[2]
+            .arguments
+            .contains(&paths.runtime_python_executable().display().to_string()));
     }
 }

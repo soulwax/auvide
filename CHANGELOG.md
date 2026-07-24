@@ -26,6 +26,8 @@ and uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A one-command modern desktop launcher with development prerequisite checks.
 - Desktop engine commands now use the verified bundled `uv` sidecar instead
   of requiring a globally installed `uv` executable.
+- The desktop now provisions a serialized, app-data-owned Python 3.12 venv and
+  invokes the engine directly from that venv on later requests.
 
 ### Changed
 

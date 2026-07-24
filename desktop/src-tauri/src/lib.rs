@@ -73,19 +73,16 @@ fn uv_sidecar_path(app: &AppHandle) -> Result<PathBuf, String> {
         .ok_or_else(|| format!("bundled uv sidecar is unavailable: {UV_SIDECAR_NAME}"))
 }
 
-fn uv_cmd(app: &AppHandle, engine: &Path) -> Result<Command, String> {
-    // The sidecar provides Python + the auvide package without relying on a
-    // system uv/Python installation or an OneDrive-synced project environment.
-    let mut c = Command::new(uv_sidecar_path(app)?);
-    c.args([
-        "run",
-        "--project",
-        &engine.to_string_lossy(),
-        "--python",
-        "3.12",
-        "-m",
-        "auvide.cli",
-    ]);
+fn engine_cmd(app: &AppHandle, engine: &Path) -> Result<Command, String> {
+    let paths = paths::AppPaths::from_app(app)?;
+    let python = runtime::ensure_runtime(
+        &paths,
+        &uv_sidecar_path(app)?,
+        engine,
+        env!("CARGO_PKG_VERSION"),
+    )?;
+    let mut c = Command::new(python);
+    c.args(["-m", "auvide.cli"]);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -98,7 +95,7 @@ fn uv_cmd(app: &AppHandle, engine: &Path) -> Result<Command, String> {
 #[tauri::command]
 fn config(app: AppHandle) -> Result<serde_json::Value, String> {
     let engine = engine_dir(&app);
-    let out = uv_cmd(&app, &engine)?
+    let out = engine_cmd(&app, &engine)?
         .arg("--dump-config")
         .output()
         .map_err(|e| format!("failed to run engine (is `uv` on PATH?): {e}"))?;
@@ -128,7 +125,7 @@ fn run_render(
     std::fs::write(&recipe_path, serde_json::to_vec_pretty(&recipe).unwrap())
         .map_err(|e| e.to_string())?;
 
-    let mut child = uv_cmd(&app, &engine)?
+    let mut child = engine_cmd(&app, &engine)?
         .arg(&input)
         .args(["-o", &output])
         .arg("--recipe")

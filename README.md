@@ -113,6 +113,11 @@ progress bar driven by the CLI's per-chunk output.
 # Add --check to verify prerequisites without opening the app.
 ```
 
+On its first engine request, the desktop app installs its managed Python 3.12
+runtime and engine environment under your app-data directory. Later launches
+reuse that environment and invoke its Python directly. FFmpeg and Real-ESRGAN
+bootstrap is the next setup step; use `setup.ps1` until it is integrated.
+
 ### Legacy GUI
 
 The original Tkinter front-end (`desktop/legacy/gui.py`) still works and gets

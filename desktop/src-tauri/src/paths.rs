@@ -47,6 +47,25 @@ impl AppPaths {
         self.runtime_dir().join("state.json")
     }
 
+    pub fn runtime_python_dir(&self) -> PathBuf {
+        self.runtime_dir().join("python")
+    }
+
+    pub fn runtime_venv_dir(&self) -> PathBuf {
+        self.runtime_dir().join("venv")
+    }
+
+    pub fn runtime_lock_path(&self) -> PathBuf {
+        self.runtime_dir().join("install.lock")
+    }
+
+    pub fn runtime_python_executable(&self) -> PathBuf {
+        #[cfg(windows)]
+        return self.runtime_venv_dir().join("Scripts").join("python.exe");
+        #[cfg(not(windows))]
+        self.runtime_venv_dir().join("bin").join("python")
+    }
+
     pub fn tools_dir(&self) -> PathBuf {
         self.app_data.join("tools")
     }
@@ -72,6 +91,7 @@ impl AppPaths {
             self.app_data.clone(),
             self.app_cache.clone(),
             self.runtime_dir(),
+            self.runtime_python_dir(),
             self.tools_dir(),
             self.models_dir(),
             self.jobs_dir(),
@@ -96,6 +116,14 @@ mod tests {
         let paths = AppPaths::from_roots(PathBuf::from("app-data"), PathBuf::from("app-cache"));
 
         assert_eq!(paths.runtime_dir(), PathBuf::from("app-data/runtime"));
+        assert_eq!(
+            paths.runtime_python_dir(),
+            PathBuf::from("app-data/runtime/python")
+        );
+        assert_eq!(
+            paths.runtime_venv_dir(),
+            PathBuf::from("app-data/runtime/venv")
+        );
         assert_eq!(
             paths.runtime_state_path(),
             PathBuf::from("app-data/runtime/state.json")
