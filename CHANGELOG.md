@@ -17,6 +17,8 @@ and uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   handling of additive fields and future event types.
 - Typed frontend render state and reducer tests for progress, cancellation,
   unrelated-run isolation, and terminal exit handling.
+- Manual, protected PyPI and TestPyPI trusted-publishing workflow with OIDC
+  setup documentation.
 
 ### Changed
 

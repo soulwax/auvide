@@ -1,0 +1,54 @@
+name: Publish PyPI Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: Target trusted-publishing environment and package index
+        required: true
+        default: testpypi
+        type: choice
+        options:
+          - testpypi
+          - pypi
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and validate distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Build distributions
+        run: uv build --project engine
+      - name: Validate distributions
+        run: uvx twine check engine/dist/*
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-distributions
+          path: engine/dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish to ${{ inputs.repository }}
+    needs: build
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.repository }}
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: dist/
+      - name: Publish to trusted index
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: ${{ inputs.repository == 'testpypi' && 'https://test.pypi.org/legacy/' || 'https://upload.pypi.org/legacy/' }}
