@@ -3,6 +3,7 @@
 // hand it to the auvide.cli engine (via `uv run -m auvide.cli`), and stream
 // its progress back as events.
 pub mod paths;
+pub mod protocol;
 pub mod runtime;
 
 use std::io::{BufRead, BufReader};

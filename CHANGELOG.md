@@ -13,6 +13,8 @@ and uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Cooperative, resumable render cancellation and versioned NDJSON progress
   events for engine consumers.
 - Desktop runtime path and persisted runtime-state foundations.
+- Typed Rust parsing for versioned engine progress events, including safe
+  handling of additive fields and future event types.
 
 ### Changed
 
