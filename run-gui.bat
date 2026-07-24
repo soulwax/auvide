@@ -1,4 +1,4 @@
 @echo off
-REM Compatibility wrapper. The maintained legacy launcher lives in desktop\run-gui.bat.
-call "%~dp0desktop\run-gui.bat" %*
+REM Launch the actively developed Tauri desktop GUI.
+call "%~dp0desktop\run-desktop.bat" %*
 exit /b %ERRORLEVEL%

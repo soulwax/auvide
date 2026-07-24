@@ -105,9 +105,11 @@ launches the `auvide` engine as a subprocess, streams its log, and shows a
 progress bar driven by the CLI's per-chunk output.
 
 ```powershell
-cd desktop
-bun install
-bun run tauri dev
+# From the repository root: checks Bun, Rust, uv, and dependencies, then opens the GUI.
+.\run-gui.bat
+
+# Or, from desktop/: .\run-desktop.bat
+# Add --check to verify prerequisites without opening the app.
 ```
 
 ### Legacy GUI
@@ -121,7 +123,7 @@ cd desktop
 uv run --python 3.12 --with ./../engine --with pillow legacy/gui.py
 ```
 
-Or double-click **`desktop/run-gui.bat`**. Two tabs:
+The legacy GUI remains available through **`desktop/run-gui.bat`**. Two tabs:
 
 - **Render** — pick an input, set scale / model / HDR / encoder, hit **Start**.
   "Show command" prints the equivalent CLI; **Cancel** stops the run (re-launch

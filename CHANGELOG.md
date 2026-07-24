@@ -23,6 +23,7 @@ and uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   targets.
 - Atomic, recoverable desktop runtime state persistence with installed-package
   metadata.
+- A one-command modern desktop launcher with development prerequisite checks.
 
 ### Changed
 
