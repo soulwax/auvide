@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import type { Config, GradeKnobs, Recipe } from "./generated/recipe-contract";
 import {
   initialRenderState,
   reduceRenderState,
@@ -9,51 +10,6 @@ import {
   type RenderExited,
   type RenderState,
 } from "./render-state";
-
-// --- types -----------------------------------------------------------------
-// Mirrors engine/src/auvide/recipe.py's Recipe dataclass field-for-field (as
-// emitted by `auvide --dump-config`). Keep in sync by hand when recipe.py's
-// fields change — it's a small, stable, flat shape.
-interface GradeKnobs {
-  saturation: number;
-  vibrance: number;
-  contrast: number;
-  gamma: number;
-  warmth: number;
-  sharpen: number;
-  exposure: number;
-  tint: number;
-  [key: string]: number; // grade_knobs is data-driven from Config, not a fixed union
-}
-
-interface Recipe {
-  scale: number;
-  model: string;
-  hdr: "on" | "off";
-  encoder: "x265" | "qsv";
-  crf: number;
-  preset: string;
-  hdr_gain: number;
-  grade: GradeKnobs;
-  trim_start: number;
-  trim_dur: number;
-  audio: boolean;
-  interpolate: number;
-  slowmo: boolean;
-  deinterlace: boolean;
-  denoise: "off" | "light" | "medium" | "strong";
-  stabilize: boolean;
-  lut: string;
-  target: string;
-  curve: string;
-}
-
-interface Config {
-  styles: Record<string, Recipe>;
-  targets: string[];
-  grade_knobs: string[];
-  models: string[];
-}
 
 interface MediaInspection {
   schema: "auvide.media";
@@ -162,10 +118,10 @@ function applyRecipeToUI(r: Recipe) {
 function collectRecipe(): Recipe {
   const r = structuredClone(recipe);
   r.scale = +($("scale") as HTMLSelectElement).value;
-  r.model = ($("model") as HTMLSelectElement).value;
+  r.model = ($("model") as HTMLSelectElement).value as Recipe["model"]; // populated from engine config
   r.hdr = ($("hdr") as HTMLSelectElement).value as Recipe["hdr"]; // <select> options are exactly "on"/"off", see index.html
   r.interpolate = +($("interp") as HTMLSelectElement).value;
-  r.target = ($("target") as HTMLSelectElement).value;
+  r.target = ($("target") as HTMLSelectElement).value as Recipe["target"]; // populated from engine config
   r.denoise = ($("denoise") as HTMLSelectElement).value as Recipe["denoise"]; // <select> options match Recipe["denoise"] exactly, see index.html
   r.grade = Object.fromEntries(
     cfg.grade_knobs.map((k) => [k, +(document.getElementById(`g-${k}`) as HTMLInputElement).value]),

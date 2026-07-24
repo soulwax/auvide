@@ -14,6 +14,8 @@ and uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Saved recipes now use the versioned `auvide.recipe` v1 envelope while
   continuing to load legacy flat JSON recipes. `--dump-config` now includes
   engine-owned `auvide.recipe-schema` metadata for every recipe field.
+- The desktop now generates and validates its recipe TypeScript contract from
+  the engine config as part of every production build.
 - A version synchronization check for Python, npm, Cargo, and Tauri metadata.
 - Cooperative, resumable render cancellation and versioned NDJSON progress
   events for engine consumers.

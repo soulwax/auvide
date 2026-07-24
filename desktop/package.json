@@ -7,8 +7,9 @@
   "scripts": {
     "stage-engine": "node scripts/stage-engine.mjs",
     "stage-uv-sidecar": "node scripts/stage-uv-sidecar.mjs",
+    "generate-contracts": "node scripts/generate-contracts.mjs",
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "bun run generate-contracts --check && tsc && vite build",
     "test": "bun test",
     "preview": "vite preview",
     "tauri": "tauri"
