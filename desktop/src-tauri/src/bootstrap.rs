@@ -66,6 +66,10 @@ pub enum ArchiveFormat {
 }
 
 impl BootstrapManifest {
+    pub fn bundled() -> Result<Self, String> {
+        Self::parse(include_str!("../resources/bootstrap-manifest.json"))
+    }
+
     pub fn parse(contents: &str) -> Result<Self, String> {
         let manifest: Self = serde_json::from_str(contents)
             .map_err(|error| format!("invalid bootstrap manifest JSON: {error}"))?;
@@ -217,5 +221,12 @@ mod tests {
 
         let manifest = BootstrapManifest::parse(MANIFEST).unwrap();
         assert!(manifest.target("aarch64-pc-windows-msvc").is_err());
+    }
+
+    #[test]
+    fn bundled_manifest_is_valid_for_the_advertised_windows_target() {
+        let manifest = BootstrapManifest::bundled().unwrap();
+
+        assert!(manifest.target("x86_64-pc-windows-msvc").is_ok());
     }
 }

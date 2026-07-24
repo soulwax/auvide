@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "runtime": {
+    "python": "3.12",
+    "engine": "0.2.0",
+    "pillow": "11.3.0"
+  },
+  "targets": {
+    "x86_64-pc-windows-msvc": {
+      "uv": {
+        "url": "https://github.com/astral-sh/uv/releases/download/0.11.16/uv-x86_64-pc-windows-msvc.zip",
+        "sha256": "dd9d6d6554bfab265bfa98aa8e8a406c5c3a7b97582f93de1f4d48d9154a0395",
+        "archive": "zip",
+        "executable": "uv.exe",
+        "license": "MIT OR Apache-2.0"
+      },
+      "ffmpeg": {
+        "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-23-14-16/ffmpeg-N-125748-g80eb9e99b9-win64-gpl.zip",
+        "sha256": "de09059774945893dfe6a2a35a952d31f4d5dcebf4f27c050ee476f04241d358",
+        "archive": "zip",
+        "ffmpeg": "ffmpeg-N-125748-g80eb9e99b9-win64-gpl/bin/ffmpeg.exe",
+        "ffprobe": "ffmpeg-N-125748-g80eb9e99b9-win64-gpl/bin/ffprobe.exe",
+        "license": "GPL-3.0-or-later"
+      },
+      "realesrgan": {
+        "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-windows.zip",
+        "sha256": "abc02804e17982a3be33675e4d471e91ea374e65b70167abc09e31acb412802d",
+        "archive": "zip",
+        "executable": "realesrgan-ncnn-vulkan.exe",
+        "models": [
+          "models/realesr-animevideov3-x2.param",
+          "models/realesr-animevideov3-x2.bin",
+          "models/realesr-animevideov3-x3.param",
+          "models/realesr-animevideov3-x3.bin",
+          "models/realesr-animevideov3-x4.param",
+          "models/realesr-animevideov3-x4.bin",
+          "models/realesrgan-x4plus-anime.param",
+          "models/realesrgan-x4plus-anime.bin",
+          "models/realesrgan-x4plus.param",
+          "models/realesrgan-x4plus.bin"
+        ],
+        "license": "BSD-3-Clause"
+      }
+    }
+  }
+}

@@ -30,6 +30,8 @@ and uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   invokes the engine directly from that venv on later requests.
 - Strict typed validation for the desktop bootstrap manifest before downloads
   or archive extraction are introduced.
+- A reviewed Windows x64 bootstrap manifest with immutable FFmpeg,
+  Real-ESRGAN, model, and uv pins.
 
 ### Changed
 
