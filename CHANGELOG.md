@@ -15,6 +15,8 @@ and uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Desktop runtime path and persisted runtime-state foundations.
 - Typed Rust parsing for versioned engine progress events, including safe
   handling of additive fields and future event types.
+- Typed frontend render state and reducer tests for progress, cancellation,
+  unrelated-run isolation, and terminal exit handling.
 
 ### Changed
 
