@@ -16,6 +16,9 @@
 *.bmp
 *.tiff
 
+# Tauri bundle icons are source assets, not extracted media.
+!desktop/src-tauri/icons/*.png
+
 # --- output / scratch dirs ---
 # keep the folders in the repo (via .gitkeep) but ignore their contents
 /output/*
@@ -28,6 +31,8 @@
 # --- project egg-info / build ---
 *.egg-info/
 uv.lock
+/engine/build/
+/engine/dist/
 
 # --- bundled third-party binaries (provision with setup.ps1) ---
 # ffmpeg.exe / ffprobe.exe exceed GitHub's 100 MB file limit and are

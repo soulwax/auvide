@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    auvide_desktop_lib::run()
+    auvide_lib::run()
 }

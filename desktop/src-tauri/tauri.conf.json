@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "auvide-desktop",
+  "productName": "auvide",
   "version": "0.2.0",
-  "identifier": "com.soulwax.auvide-desktop",
+  "identifier": "com.soulwax.auvide",
   "build": {
     "beforeDevCommand": "bun run stage-engine && bun run dev",
     "devUrl": "http://localhost:1420",

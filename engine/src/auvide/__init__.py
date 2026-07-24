@@ -6,4 +6,10 @@ the pipeline entry point.
 """
 from __future__ import annotations
 
-__version__ = "0.2.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("auvide")
+except PackageNotFoundError:
+    # Supports direct source-tree execution before an editable/package install.
+    __version__ = "0.0.0+unknown"

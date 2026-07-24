@@ -1,7 +1,8 @@
 {
-  "name": "auvide-desktop",
+  "name": "auvide",
   "private": true,
   "version": "0.2.0",
+  "description": "AI video upscaler + vibrant HDR10 remapper",
   "type": "module",
   "scripts": {
     "stage-engine": "node scripts/stage-engine.mjs",
