@@ -98,6 +98,10 @@ jobs:
         working-directory: desktop
         run: bun run stage-engine
 
+      - name: Stage verified uv sidecar
+        working-directory: desktop
+        run: bun run stage-uv-sidecar
+
       - name: TypeScript build
         working-directory: desktop
         run: bun run build

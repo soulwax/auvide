@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "stage-engine": "node scripts/stage-engine.mjs",
+    "stage-uv-sidecar": "node scripts/stage-uv-sidecar.mjs",
     "dev": "vite",
     "build": "tsc && vite build",
     "test": "bun test",

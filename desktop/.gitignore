@@ -33,6 +33,7 @@ __pycache__/
 
 # Provisioned third-party binaries, models, and archives
 /bin/
+/src-tauri/binaries/
 /legacy/bin_obsolete/
 /legacy/tools/
 

@@ -19,6 +19,8 @@ and uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unrelated-run isolation, and terminal exit handling.
 - Manual, protected PyPI and TestPyPI trusted-publishing workflow with OIDC
   setup documentation.
+- A pinned, SHA256-verified `uv` sidecar staging path for supported desktop
+  targets.
 
 ### Changed
 
