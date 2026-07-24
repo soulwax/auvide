@@ -38,17 +38,15 @@ from . import grade
 from . import recipe as recipes
 from . import stages
 from . import tools
+from .progress import Reporter
 
 # CWD, not the installed package's location: `input/`/`output/` are a
 # convenience for running from a checkout, not part of the installed package.
 HERE = Path.cwd()
-FFMPEG = tools.ffmpeg()
-FFPROBE = tools.ffprobe()
-REALESRGAN = tools.realesrgan()
-MODELS = tools.models_dir()
 INPUT_DIR = HERE / "input"
 OUTPUT_DIR = HERE / "output"
 VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v"}
+REPORTER = Reporter()
 
 # model key -> (realesrgan model name, native scale or None for "any 2/3/4")
 MODEL_MAP = {
@@ -71,6 +69,7 @@ MAX_CLL = "1000,400"
 
 
 def die(msg: str) -> NoReturn:
+    REPORTER.event("failed", code="pipeline_error", message=msg)
     print(f"\n[error] {msg}", file=sys.stderr)
     sys.exit(1)
 
@@ -100,7 +99,7 @@ def check_deps() -> None:
 
 def probe(src: Path) -> dict:
     out = subprocess.run(
-        [str(FFPROBE), "-v", "error", "-print_format", "json",
+        [str(tools.ffprobe()), "-v", "error", "-print_format", "json",
          "-show_streams", "-show_format", str(src)],
         capture_output=True, text=True)
     if out.returncode != 0:
@@ -204,19 +203,25 @@ def make_preview(args, src: Path, info: dict) -> None:
     for t in times:
         out = pdir / f"{src.stem}_t{int(t)}s_{tag}.png"
         frame = pdir / "_frame.png"
-        run([str(FFMPEG), "-y", "-ss", str(t), "-i", str(src), "-frames:v", "1", str(frame)])
+        run([
+            str(tools.ffmpeg()), "-y", "-ss", str(t), "-i", str(src),
+            "-frames:v", "1", str(frame),
+        ])
         if args.upscale:
             up = pdir / "_up.png"
-            run([str(REALESRGAN), "-i", str(frame), "-o", str(up), "-n", model_name,
-                 "-s", str(re_scale), "-m", str(MODELS), "-g", str(args.gpu), "-f", "png"])
+            run([
+                str(tools.realesrgan()), "-i", str(frame), "-o", str(up), "-n", model_name,
+                "-s", str(re_scale), "-m", str(tools.models_dir()), "-g", str(args.gpu),
+                "-f", "png",
+            ])
             down = f"scale={tw}:{th}:flags=lanczos," if re_scale != args.scale else ""
             vf = (f"[1:v]scale={tw}:{th}:flags=bicubic,format=rgb24[la];"
                   f"[0:v]{down}{grade_vf}[lg];[la][lg]hstack=inputs=2")
-            run([str(FFMPEG), "-y", "-i", str(up), "-i", str(frame),
+            run([str(tools.ffmpeg()), "-y", "-i", str(up), "-i", str(frame),
                  "-filter_complex", vf, str(out)], cwd=getattr(args, "_lut_cwd", None))
         else:
             vf = f"split=2[a][b];[a]format=rgb24[la];[b]{grade_vf}[lg];[la][lg]hstack=inputs=2"
-            run([str(FFMPEG), "-y", "-i", str(frame), "-vf", vf, str(out)],
+            run([str(tools.ffmpeg()), "-y", "-i", str(frame), "-vf", vf, str(out)],
                 cwd=getattr(args, "_lut_cwd", None))
         print(f"  {out.name}")
     for tmp in (pdir / "_frame.png", pdir / "_up.png"):   # scrub intermediates
@@ -237,7 +242,7 @@ def normalize_seq(d: Path) -> str:
 
 def encode_cmd(args, info, in_pattern: str, out_fps: str, out_file: Path) -> list[str]:
     vf = build_vf(args, info)
-    cmd = [str(FFMPEG), "-y", "-framerate", out_fps]
+    cmd = [str(tools.ffmpeg()), "-y", "-framerate", out_fps]
     if args.hdr == "on":
         # Tag the extracted-frame PNG sequence as BT.709 SDR on the input side.
         # PNGs carry no colorspace metadata, so without this some ffmpeg/zimg
@@ -360,7 +365,20 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true", help="print the plan and exit")
     ap.add_argument("--dump-config", action="store_true", dest="dump_config",
                     help=argparse.SUPPRESS)   # emit styles/targets/knobs as JSON (for GUIs)
+    ap.add_argument("--progress-json", action="store_true",
+                    help="emit versioned NDJSON progress events on stdout")
+    ap.add_argument("--run-id", help=argparse.SUPPRESS)
     args = ap.parse_args()
+
+    global REPORTER
+    REPORTER = Reporter(args.progress_json, args.run_id)
+
+    if args.dump_config and args.progress_json:
+        die("--dump-config cannot be combined with --progress-json")
+    if args.progress_json:
+        # Keep legacy print calls readable while reserving original stdout for
+        # NDJSON events. Reporter captured stdout before this redirection.
+        sys.stdout = REPORTER.stderr
 
     if args.dump_config:
         import dataclasses
@@ -456,6 +474,29 @@ def main() -> None:
     elif args.start:
         expected = max(1, expected - int(round(args.start * info["fps"])))
     n_chunks = math.ceil(expected / args.chunk)
+    progress_stages = []
+    if args.stabilize:
+        progress_stages.append("stabilize_analysis")
+    progress_stages.append("extract")
+    progress_stages.append("upscale")
+    if args.interpolate and args.interpolate > 1:
+        progress_stages.append("interpolate")
+    progress_stages.extend(["encode", "concat_mux"])
+    if not args.keep:
+        progress_stages.append("cleanup")
+
+    def stage_started(stage: str, **extra) -> None:
+        REPORTER.event("stage_started", stage=stage,
+                       ordinal=progress_stages.index(stage) + 1,
+                       stage_count=len(progress_stages), **extra)
+
+    def stage_completed(stage: str, **extra) -> None:
+        REPORTER.event("stage_completed", stage=stage, **extra)
+
+    REPORTER.event(
+        "plan", input=str(src), output=str(out), total_frames=expected,
+        total_chunks=n_chunks, stages=progress_stages,
+    )
     trim = f"  trim        {args.start:g}s"
     trim += f" +{args.duration:g}s" if args.duration else " -> end"
 
@@ -508,13 +549,16 @@ def main() -> None:
     have = len(list(frames_in.glob("frame_*.png")))
     if (args.resume and marker.exists() and marker.read_text() == sig
             and have >= expected - 1):
+        stage_started("extract")
         print(f"[1/3] frames: reusing {have} extracted frames")
+        stage_completed("extract")
     else:
         cwd = None
         if args.stabilize:
+            stage_started("stabilize_analysis")
             print("[1/3] stabilize pass 1 (motion analysis) ...", flush=True)
             cwd = str(work)                    # bare .trf name; cwd avoids the drive-colon
-            det = [str(FFMPEG), "-y"]
+            det = [str(tools.ffmpeg()), "-y"]
             if args.start:
                 det += ["-ss", str(args.start)]
             det += ["-i", str(src)]
@@ -522,10 +566,12 @@ def main() -> None:
                 det += ["-t", str(args.duration)]
             det += ["-vf", "vidstabdetect=result=transforms.trf", "-f", "null", "-"]
             run(det, cwd=cwd)
+            stage_completed("stabilize_analysis")
             pre.append("vidstabtransform=input=transforms.trf:smoothing=20")
+        stage_started("extract")
         print(f"[1/3] extracting {expected} frames ...", flush=True)
         t0 = time.time()
-        ex = [str(FFMPEG), "-y"]
+        ex = [str(tools.ffmpeg()), "-y"]
         if args.start:
             ex += ["-ss", str(args.start)]
         ex += ["-i", str(src)]
@@ -538,6 +584,7 @@ def main() -> None:
         marker.write_text(sig)
         have = len(list(frames_in.glob("frame_*.png")))
         print(f"      extracted {have} frames in {fmt_eta(time.time()-t0)}")
+        stage_completed("extract")
 
     total = have  # actual frames on disk (may differ from container's nb_frames)
     n_chunks = math.ceil(total / args.chunk)
@@ -552,6 +599,10 @@ def main() -> None:
     chain = " -> ".join(s.label for s in frame_stages)
 
     # ---- phase 2: process + encode each chunk ----------------------------
+    stage_started("upscale")
+    if args.interpolate and args.interpolate > 1:
+        stage_started("interpolate")
+    stage_started("encode")
     print(f"[2/3] {chain} + encode ({total} frames, {n_chunks} chunks) ...", flush=True)
     batch_in = work / "batch_in"
     done_frames = 0
@@ -568,6 +619,8 @@ def main() -> None:
         if args.resume and seg.exists() and seg.stat().st_size > 0:
             print(f"      chunk {c+1}/{n_chunks}: skip (done)")
             done_frames += count
+            REPORTER.event("progress", stage="encode", current=c + 1, total=n_chunks,
+                           unit="chunks", chunk=c + 1)
             continue
 
         # fresh batch input
@@ -603,12 +656,20 @@ def main() -> None:
         print(f"      chunk {c+1}/{n_chunks}: {count} frames in "
               f"{fmt_eta(time.time()-t0)}  |  {rate:.2f} fps  |  ETA {fmt_eta(remaining)}",
               flush=True)
+        REPORTER.event("progress", stage="encode", current=c + 1, total=n_chunks,
+                       unit="chunks", chunk=c + 1)
+
+    stage_completed("upscale")
+    if args.interpolate and args.interpolate > 1:
+        stage_completed("interpolate")
+    stage_completed("encode")
 
     # tidy transient batch dirs
     for d in list(work.glob("batch_*")):
         shutil.rmtree(d, ignore_errors=True)
 
     # ---- phase 3: concat + mux audio -------------------------------------
+    stage_started("concat_mux")
     print("[3/3] concatenating chunks + muxing audio ...", flush=True)
     segs = sorted(seg_dir.glob("seg_*.mp4"))
     if not segs:
@@ -616,7 +677,7 @@ def main() -> None:
     list_file = work / "concat.txt"
     list_file.write_text("".join(f"file '{s.as_posix()}'\n" for s in segs))
 
-    concat_cmd = [str(FFMPEG), "-y", "-f", "concat", "-safe", "0", "-i", str(list_file)]
+    concat_cmd = [str(tools.ffmpeg()), "-y", "-f", "concat", "-safe", "0", "-i", str(list_file)]
     # slow-mo changes duration, so audio can't be kept in sync -> drop it
     keep_audio = info["has_audio"] and not args.no_audio and (fmult == 1 or smooth)
     if keep_audio:
@@ -631,10 +692,13 @@ def main() -> None:
         concat_cmd += ["-map", "0:v:0", "-c:v", "copy"]
     concat_cmd += ["-movflags", "+faststart", str(out)]
     run(concat_cmd)
+    stage_completed("concat_mux")
 
     # ---- done ------------------------------------------------------------
     if not args.keep:
+        stage_started("cleanup")
         shutil.rmtree(work, ignore_errors=True)
+        stage_completed("cleanup")
 
     size_mb = out.stat().st_size / (1024 * 1024)
     eff_fps = info["fps"] * fmult if smooth else info["fps"]
@@ -643,6 +707,7 @@ def main() -> None:
     print(f"  {tw}x{th}  {eff_fps:.3f} fps  {size_mb:.1f} MB  "
           f"total {fmt_eta(time.time()-run_start)}")
     print("=" * 60)
+    REPORTER.event("completed", output=str(out))
 
 
 if __name__ == "__main__":

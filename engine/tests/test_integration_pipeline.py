@@ -143,6 +143,55 @@ def test_sdr_render_stays_bt709(synthetic_clip, tmp_path, env_with_fake_tools):
     assert vstream["pix_fmt"] == "yuv420p"
 
 
+def test_explicit_upscaler_overrides_work_without_path_entry(
+        synthetic_clip, tmp_path, fake_realesrgan_on_path):
+    """Desktop-managed tools must win without adding their folder to PATH."""
+    out = tmp_path / "out_override.mp4"
+    work = tmp_path / "work"
+    suffix = ".bat" if sys.platform == "win32" else ""
+    env = dict(os.environ)
+    env["AUVIDE_REALESRGAN"] = str(fake_realesrgan_on_path / f"realesrgan-ncnn-vulkan{suffix}")
+    env["AUVIDE_REALESRGAN_MODELS"] = str(fake_realesrgan_on_path / "models")
+
+    result = run_cli([
+        str(synthetic_clip), "-o", str(out), "--scale", "2", "--hdr", "off",
+        "--work", str(work), "--chunk", "100", "--vibrance", "none",
+    ], cwd=tmp_path, env=env)
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert out.exists()
+
+
+def test_progress_json_is_pure_ndjson_with_ordered_terminal_events(
+        synthetic_clip, tmp_path, env_with_fake_tools):
+    out = tmp_path / "out_progress.mp4"
+    work = tmp_path / "work"
+    result = run_cli([
+        str(synthetic_clip), "-o", str(out), "--scale", "2", "--hdr", "off",
+        "--work", str(work), "--chunk", "100", "--vibrance", "none",
+        "--progress-json", "--run-id", "integration-progress",
+    ], cwd=tmp_path, env=env_with_fake_tools)
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    events = [json.loads(line) for line in result.stdout.splitlines() if line]
+    assert events
+    assert all(event["protocol"] == "auvide.progress" for event in events)
+    assert all(event["version"] == 1 for event in events)
+    assert all(event["run_id"] == "integration-progress" for event in events)
+    assert events[0]["type"] == "plan"
+    assert events[-1] == {
+        "protocol": "auvide.progress",
+        "version": 1,
+        "run_id": "integration-progress",
+        "type": "completed",
+        "output": str(out),
+    }
+    assert any(event["type"] == "progress" and event["stage"] == "encode"
+               for event in events)
+    assert "[1/3]" not in result.stdout
+    assert "[1/3]" in result.stderr
+
+
 def test_resume_skips_completed_chunks(synthetic_clip, tmp_path, env_with_fake_tools):
     out = tmp_path / "out.mp4"
     work = tmp_path / "work"

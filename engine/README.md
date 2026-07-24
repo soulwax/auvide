@@ -29,6 +29,23 @@ Run `auvide --help` for all pipeline, grade, restoration, interpolation, and
 delivery-target options. For project documentation and the desktop application,
 see <https://github.com/soulwax/auvide>.
 
+## Managed tool overrides
+
+Desktop/bootstrap integrations can provide absolute paths instead of modifying
+PATH. Invalid explicit paths fail with an actionable error and never fall back
+to a different system tool.
+
+```text
+AUVIDE_FFMPEG
+AUVIDE_FFPROBE
+AUVIDE_REALESRGAN
+AUVIDE_REALESRGAN_MODELS
+AUVIDE_RIFE
+AUVIDE_RIFE_MODELS
+```
+
+The `*_MODELS` values must name directories containing `.param` model files.
+
 ## License
 
 MIT. See `LICENSE`.

@@ -71,6 +71,10 @@ class InterpolateStage:
     def process(self, in_dir: Path, out_dir: Path) -> None:
         exe, mdir = tools.rife(), tools.rife_model(self.model)
         if not exe or not mdir:
+            detail = tools.override_error(tools.ENV_RIFE) or tools.override_error(
+                tools.ENV_RIFE_MODELS)
+            if detail:
+                raise StageError(detail)
             raise StageError("rife-ncnn-vulkan / models not found — scoop install "
                              "rife-ncnn-vulkan (or see README)")
         n_in = len(list(Path(in_dir).glob("*.png")))
