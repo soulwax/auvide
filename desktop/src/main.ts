@@ -1,6 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import {
+  initialRenderState,
+  reduceRenderState,
+  type ProgressEnvelope,
+  type RenderAction,
+  type RenderExited,
+  type RenderState,
+} from "./render-state";
 
 // --- types -----------------------------------------------------------------
 // Mirrors engine/src/auvide/recipe.py's Recipe dataclass field-for-field (as
@@ -47,6 +55,23 @@ interface Config {
   models: string[];
 }
 
+interface MediaInspection {
+  schema: "auvide.media";
+  version: number;
+  video: {
+    width: number;
+    height: number;
+    fps: { numerator: number; denominator: number };
+    codec: string | null;
+    pixel_format: string | null;
+    bit_depth: number | null;
+    color_primaries: string | null;
+    transfer: string | null;
+  };
+  audio: { present: boolean; codec: string | null; channels: number | null };
+  warnings: { code: string; message: string }[];
+}
+
 const GRADE_META: Record<string, [number, number, string]> = {
   exposure: [-1, 1, "Exposure"], saturation: [0.5, 2, "Saturation"],
   vibrance: [0, 1, "Vibrance"], contrast: [0, 1, "Contrast"],
@@ -56,8 +81,9 @@ const GRADE_META: Record<string, [number, number, string]> = {
 
 let cfg: Config;
 let recipe: Recipe;
+let renderState: RenderState = initialRenderState;
+let inspectionRequest = 0;
 const $ = (id: string) => document.getElementById(id)!;
-const CHUNK_RE = /chunk\s+(\d+)\/(\d+)/;
 
 // --- curves editor ---------------------------------------------------------
 class Curves {
@@ -199,22 +225,92 @@ async function start() {
   const output = ($("output") as HTMLInputElement).value.trim();
   if (!input) { setStatus("Pick an input video first.", "err"); return; }
   if (!output) { setStatus("Set an output path.", "err"); return; }
-  ($("start") as HTMLButtonElement).disabled = true;
-  ($("cancel") as HTMLButtonElement).disabled = false;
-  ($("fill") as HTMLElement).style.width = "0";
   $("log").textContent = "";
-  setStatus("Starting…");
+  const runId = crypto.randomUUID();
+  dispatchRender({ type: "started", runId });
   try {
-    await invoke("run_render", { input, output, recipe: collectRecipe() });
+    const startedRunId = await invoke<string>("run_render", {
+      input,
+      output,
+      recipe: collectRecipe(),
+      runId,
+    });
+    if (startedRunId !== runId) {
+      dispatchRender({
+        type: "launch_failed",
+        runId,
+        message: "Render start returned an unexpected run ID.",
+      });
+    }
   } catch (e) {
-    setStatus(String(e), "err");
-    ($("start") as HTMLButtonElement).disabled = false;
-    ($("cancel") as HTMLButtonElement).disabled = true;
+    dispatchRender({ type: "launch_failed", runId, message: String(e) });
   }
+}
+
+function dispatchRender(action: RenderAction) {
+  renderState = reduceRenderState(renderState, action);
+  renderRenderState();
+}
+
+function renderRenderState() {
+  const isRunning = renderState.phase === "running";
+  ($("start") as HTMLButtonElement).disabled = isRunning;
+  ($("cancel") as HTMLButtonElement).disabled = !isRunning;
+  ($("fill") as HTMLElement).style.width = `${renderState.progress}%`;
+  const kind = renderState.phase === "completed" ? "ok" : renderState.phase === "failed" ? "err" : "";
+  const warning = renderState.warning ? ` — ${renderState.warning}` : "";
+  setStatus(renderState.status + warning, kind);
 }
 
 function setStatus(t: string, kind: "" | "ok" | "err" = "") {
   const el = $("status"); el.textContent = t; el.className = "status " + kind;
+}
+
+async function inspectInput(input: string) {
+  const request = ++inspectionRequest;
+  setSourceSummary("Inspecting source…");
+  try {
+    const inspection = await invoke<MediaInspection>("inspect_media", { input });
+    if (request === inspectionRequest) renderSourceInspection(inspection);
+  } catch (e) {
+    if (request === inspectionRequest) setSourceSummary(`Could not inspect source: ${String(e)}`, "err");
+  }
+}
+
+function setSourceSummary(message: string, kind: "" | "ready" | "err" = "") {
+  const summary = $("source-summary");
+  summary.className = "source-summary " + kind;
+  summary.textContent = message;
+}
+
+function renderSourceInspection(inspection: MediaInspection) {
+  const summary = $("source-summary");
+  summary.className = "source-summary ready";
+  summary.replaceChildren();
+  const fps = inspection.video.fps.denominator > 0
+    ? inspection.video.fps.numerator / inspection.video.fps.denominator : 0;
+  const color = inspection.video.transfer === "smpte2084" ? "HDR PQ" : "SDR / source";
+  const parts = [
+    `${inspection.video.width}×${inspection.video.height}`,
+    `${fps.toFixed(3)} fps`,
+    inspection.video.codec || "unknown codec",
+    inspection.video.pixel_format || "unknown pixel format",
+    inspection.video.bit_depth ? `${inspection.video.bit_depth}-bit` : "bit depth unknown",
+    color,
+    inspection.audio.present ? `audio${inspection.audio.channels ? ` · ${inspection.audio.channels} ch` : ""}` : "no audio",
+  ];
+  for (const part of parts) {
+    const item = document.createElement("span");
+    item.className = "meta";
+    item.textContent = part;
+    summary.appendChild(item);
+  }
+  for (const warning of inspection.warnings) {
+    const item = document.createElement("span");
+    item.className = "warning";
+    item.textContent = warning.message;
+    summary.appendChild(item);
+  }
 }
 
 async function init() {
@@ -234,6 +330,7 @@ async function init() {
       ($("input") as HTMLInputElement).value = f;
       const out = f.replace(/\.[^.]+$/, "") + "_auvide.mp4";
       ($("output") as HTMLInputElement).value = out;
+      void inspectInput(f);
     }
   };
   $("pick-output").onclick = async () => {
@@ -242,27 +339,27 @@ async function init() {
   };
   $("curve-reset").onclick = () => curves.reset();
   $("start").onclick = start;
-  $("cancel").onclick = () => invoke("cancel_render");
+  $("cancel").onclick = async () => {
+    try {
+      await invoke("cancel_render");
+      setStatus("Cancellation requested…");
+    } catch (e) {
+      setStatus(String(e), "err");
+    }
+  };
   for (const id of ["scale", "model", "hdr", "interp", "target", "denoise"])
     $(id).addEventListener("change", refreshPipeline);
 
   await listen<string>("render:log", (e) => {
     const log = $("log"); log.textContent += e.payload + "\n"; log.scrollTop = log.scrollHeight;
-    const m = CHUNK_RE.exec(e.payload);
-    if (m) {
-      const pct = Math.round((+m[1] / +m[2]) * 100);
-      ($("fill") as HTMLElement).style.width = pct + "%";
-      setStatus(`Rendering — chunk ${m[1]}/${m[2]}`);
-    } else if (e.payload.includes("[1/3]")) setStatus("Extracting frames…");
-    else if (e.payload.includes("[3/3]")) setStatus("Muxing…");
   });
-  await listen<number>("render:done", (e) => {
-    ($("start") as HTMLButtonElement).disabled = false;
-    ($("cancel") as HTMLButtonElement).disabled = true;
-    if (e.payload === 0) { ($("fill") as HTMLElement).style.width = "100%"; setStatus("Done ✔", "ok"); }
-    else setStatus(`Failed (exit ${e.payload}) — see log`, "err");
+  await listen<ProgressEnvelope>("render:progress", (e) => {
+    dispatchRender({ type: "progress", envelope: e.payload });
   });
-  setStatus("Ready.");
+  await listen<RenderExited>("render:exited", (e) => {
+    dispatchRender({ type: "exited", exit: e.payload });
+  });
+  renderRenderState();
 }
 
 window.addEventListener("DOMContentLoaded", () => { init().catch((e) => setStatus(String(e), "err")); });

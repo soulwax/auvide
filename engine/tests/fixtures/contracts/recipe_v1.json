@@ -1,0 +1,11 @@
+{
+  "schema": "auvide.recipe",
+  "version": 1,
+  "recipe": {
+    "scale": 4,
+    "model": "x4plus",
+    "hdr": "off",
+    "crf": 21,
+    "target": "reel"
+  }
+}

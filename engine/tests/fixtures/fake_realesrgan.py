@@ -39,7 +39,7 @@ def main() -> None:
         dest = out_dir / frame.name
         r = subprocess.run(
             [ffmpeg, "-y", "-i", str(frame), "-vf",
-             f"scale=iw*{args.scale}:ih*{args.scale}:flags=neighbor", str(dest)],
+             f"scale=iw*{args.scale}:ih*{args.scale}:flags=neighbor", str(dest)], check=False,
             capture_output=True, text=True)
         if r.returncode != 0:
             print(r.stderr, file=sys.stderr)

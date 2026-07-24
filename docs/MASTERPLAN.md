@@ -37,9 +37,10 @@ product work targets the Tauri application.
 auvide should be useful at three levels without maintaining three processing
 implementations:
 
-1. **Approachable desktop workstation** — import media, inspect it, compare
-   real previews, choose a look, understand cost and compatibility, queue work,
-   resume interruptions, and find results later.
+1. **Approachable desktop workstation** — create or open a project workspace
+   folder, import and assemble media, inspect it, compare real previews, choose
+   a look, understand cost and compatibility, queue work, resume interruptions,
+   and find the complete project state later.
 2. **Reproducible CLI** — inspect, plan, preview, render, batch, diagnose, and
    automate through stable text and JSON contracts.
 3. **Reusable engine package** — one installable Python source of truth for
@@ -47,11 +48,15 @@ implementations:
 
 The product promise remains deliberately narrow:
 
-> Improve, restore, upscale, grade, and deliver complete video clips with
+> Assemble, improve, restore, upscale, grade, and deliver video clips with
 > confidence.
 
-auvide is not a nonlinear editor. Multi-track timelines, transitions, titles,
-audio mixing, and general compositing are outside the current roadmap.
+auvide includes a deliberately small project-backed editor for preparing an
+enhancement job: an ordered video/audio timeline, external audio import such as
+MP3, detaching a clip's audio and video, cuts/trims, and clip rearrangement. It
+is not intended to become a general nonlinear editor; transitions, titles,
+effect automation, advanced audio mixing, and general compositing remain
+outside the current roadmap.
 
 ## 3. Target Deliverables
 
@@ -65,7 +70,10 @@ One repository must produce:
    diagnostic contracts.
 5. A durable local job model for queue, cancellation, resume, logs, and
    history.
-6. Documentation and release material that accurately show limitations,
+6. A versioned, user-chosen project workspace folder containing persistent
+   project metadata, settings, imported-media records, timeline edits,
+   conversion status, and project-scoped job history.
+7. Documentation and release material that accurately show limitations,
    dependencies, signing status, and HDR behavior.
 
 ## 4. Current Baseline
@@ -94,8 +102,9 @@ One repository must produce:
 
 ### 4.2 In-progress integration
 
-- The visible desktop render flow still scrapes human log text instead of
-  consuming the typed progress path end to end.
+- The desktop render flow consumes typed engine progress and typed terminal
+  events. It is still a single active-render service rather than a durable
+  multi-job supervisor.
 - Rust process state remains PID-centered rather than a durable job
   supervisor.
 - Bootstrap downloading, safe extraction, component installation, health
@@ -108,9 +117,9 @@ One repository must produce:
 - The Tauri GUI exposes only part of `Recipe`.
 - Source inspection, real preview, preflight, estimates, queue, restart
   recovery, history, custom presets, and result actions are not present.
-- CLI rendering is capable, but source inspection, resolved plan, capabilities,
-  first-class preview, arbitrary batch manifests, and versioned recipe schema
-  are not yet complete client contracts.
+- CLI rendering now includes normalized source inspection. Resolved plans,
+  capabilities, first-class previews, arbitrary batch manifests, and a
+  versioned recipe schema are not yet complete client contracts.
 - Release workflow, updater, platform signing, and clean-machine installers
   remain unfinished.
 
@@ -123,17 +132,17 @@ belong in `CHANGELOG.md`; do not leave completed work described as pending.
 
 ```text
 TypeScript desktop UI
-  interaction, forms, visual state, preview presentation, queue/history views
+  interaction, forms, media bin/timeline, preview, queue/history views
             |
             | typed Tauri commands and events
             v
 Rust application service
-  process supervision, durable jobs, app paths, bootstrap, filesystem and OS
+  project workspace I/O, process supervision, durable jobs, bootstrap and OS
             |
-            | versioned recipe + CLI JSON/NDJSON
+            | versioned project/timeline/recipe + CLI JSON/NDJSON
             v
 Python engine
-  defaults, schema, validation, inspect, plan, preview, render, capabilities
+  schemas, validation, timeline resolution, inspect/plan/preview/render
             |
             v
 FFmpeg / FFprobe / Real-ESRGAN / optional RIFE
@@ -161,6 +170,8 @@ The following contracts are versioned and engine-owned:
 | `auvide.progress` | Runtime state and artifacts | Rust bridge, automation |
 | `auvide.capabilities` | Tools, devices, models, encoders, storage | setup, doctor, preflight |
 | `auvide.batch` | Shared and per-item jobs | CLI batch, desktop queue import |
+| `auvide.project` | Workspace identity, media registry, settings, status index | desktop, recovery, CLI |
+| `auvide.timeline` | Ordered tracks, clip references, ranges, links, edits | editor, preview, render plan |
 
 Backward compatibility:
 
@@ -169,12 +180,43 @@ Backward compatibility:
 - Additive fields are tolerated where safe.
 - Schema-version incompatibility fails with a stable code and recovery message.
 
-### 5.3 Durable job unit
+### 5.3 Persistent project workspace
+
+A project is a normal user-selected folder and can be reopened directly as a
+workspace. Its portable, versioned files are the durable source of project
+continuity:
+
+```text
+my-project/
+  auvide.project.json       identity, schema version, settings, status index
+  media.json                imported-media registry and fingerprints
+  timeline.json             ordered video/audio tracks and clip edits
+  media/                    optional project-managed source copies
+  exports/                  default completed outputs
+  .auvide/
+    autosave/
+    cache/                  thumbnails, waveforms, proxies, previews
+    jobs/<job-id>/          durable conversion records
+```
+
+An imported asset is always represented in `media.json`. Imports may either
+link to an external absolute path or copy/move an explicitly chosen file into
+`media/`; the UI must state which storage mode is active. Missing linked media
+stays in the project as an offline asset and can be relinked by fingerprint.
+Caches are disposable, while manifests, edits, settings, and job records are
+not.
+
+Project saves and schema migrations are atomic and recoverable. Opening a
+folder validates its manifest, reconciles conversion states, and never reports
+an orphaned process as still running. Concurrent writers use an advisory lock
+and a read-only/recovery path rather than silently overwriting one another.
+
+### 5.4 Durable job unit
 
 Each accepted desktop job owns:
 
 ```text
-app_data/jobs/<job-id>/
+<project>/.auvide/jobs/<job-id>/
   job.json
   effective-plan.json
   state.json
@@ -187,7 +229,12 @@ app_data/jobs/<job-id>/
 orphaned running jobs become interrupted; the app never silently restarts an
 expensive render.
 
-### 5.4 Data and privacy
+For a source opened without a saved project, the desktop creates an explicit
+temporary workspace and asks where to save it before the state becomes
+valuable. App-level storage may retain only recent-project pointers and
+project-independent setup data.
+
+### 5.5 Data and privacy
 
 - Media and previews remain local.
 - No telemetry exists unless separately designed with explicit consent.
@@ -237,6 +284,8 @@ Outcome: GUI and automation consume stable engine-owned truth.
 - C8 backward-compatible subcommand organization.
 - C9 progress enhancements: weighted overall progress, ETA, throughput, and
   artifacts.
+- C10 versioned project/timeline contracts and deterministic edit-decision
+  resolution for preview, preflight, and render.
 
 ### D — Desktop Application Service
 
@@ -249,6 +298,8 @@ Outcome: reliable process and job behavior behind any GUI.
 - D5 preview artifact transport/cache.
 - D6 history, result validation, and support bundle.
 - D7 updater and safe active-job exclusion.
+- D8 atomic workspace-folder service: create/open/save/autosave, media
+  import/relink, migrations, locking, and project-scoped jobs.
 
 ### X — Desktop Experience
 
@@ -263,7 +314,10 @@ Outcome: an understandable visual workstation.
 - X6 queue, active render, cancellation/resume, and concise activity.
 - X7 completion, history, rerun/duplicate, reveal/open, notifications.
 - X8 setup/repair, settings, cache/storage, diagnostics, and updates.
-- X9 scopes and advanced creative work only after core preview/queue quality.
+- X9 default New Project/Open Folder launch modal with recent workspaces at its
+  side, plus the project media bin and focused timeline editing: add external
+  audio, detach linked audio/video, split/trim, delete, and rearrange clips.
+- X10 scopes and advanced creative work only after core preview/queue quality.
 
 Detailed behavior and acceptance requirements are in
 [`../GUI_MASTERPLAN.md`](../GUI_MASTERPLAN.md).
@@ -322,11 +376,12 @@ Purpose: support serious repeated and overnight use.
 
 Required:
 
-- C7 and useful C9 metrics.
-- D3–D4 and D6.
-- X6–X8 complete.
+- C7, C10, and useful C9 metrics.
+- D3–D4, D6, and D8.
+- X6–X9 complete.
 - Durable queue/history, restart recovery, arbitrary-path batch, result
-  actions, and support bundle.
+  actions, project workspace folders, the focused timeline editor, and support
+  bundle.
 
 ### 1.0 — Trustworthy Public Product
 
@@ -362,6 +417,9 @@ X1 shell -----------+----------------^
 D2 + C4 -> D3 durable jobs -> D4 queue -> X6/X7
 C6 ------> X8 setup/diagnostics
 C7 ------> X6 batch queue
+C10 project/timeline -> D8 workspace service -> X9 media bin/editor
+                                  |
+                                  +-> D3 project-scoped jobs
 ```
 
 Safe parallel lanes after shared contracts are merged:
@@ -411,6 +469,8 @@ Agent handoffs use the exact template in `MASTERPLAN_IMPLEMENTATION.md`.
 - Formatting/lint/type/build checks for touched languages.
 - No new human-log parsing.
 - No engine rule duplicated in Rust/TypeScript.
+- Project manifests and timelines pass schema, atomic-save, migration, and
+  missing-media recovery tests.
 - No user path, downloaded executable, generated media, or credential committed.
 
 ### Per release
@@ -439,16 +499,24 @@ Agent handoffs use the exact template in `MASTERPLAN_IMPLEMENTATION.md`.
 | Archive/download attack | HTTPS, checksum, limits, safe extraction |
 | SmartScreen/Gatekeeper | signing budget/support decision before promotion |
 | HDR expectations | prominent stylized-remap and monitor-limit explanations |
-| Scope expands to editing suite | enhancement/export boundary |
+| Project corruption or stale status | atomic saves, migrations, reconciliation, recovery copies |
+| Scope expands to editing suite | fixed preparation-edit set; enhancement/export remains primary |
 
 ## 12. Definition of Success
 
 The roadmap is successful when:
 
+- With no active workspace, the desktop opens on a New Project/Open Folder
+  modal with recently opened workspaces listed at its side.
 - A new desktop user reaches a real before/after preview and completed output
   without a terminal.
 - A long render can be understood, cancelled, resumed, recovered after restart,
   and reproduced later.
+- A project folder can be moved or reopened with its settings, edit decisions,
+  imported-media records, conversion status, and history intact; missing linked
+  media can be relinked.
+- A user can add external audio, detach a source clip's audio/video, cut or trim
+  clips, and rearrange them before previewing and rendering the assembled result.
 - A power user can perform the same inspect/plan/preview/render/batch workflow
   through documented versioned CLI contracts.
 - The same recipe resolves to the same effective pipeline in GUI and CLI.

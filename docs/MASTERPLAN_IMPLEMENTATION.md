@@ -199,11 +199,14 @@ verify it before work:
 - `P3E.1`: manifest model and reviewed Windows x64 pins exist. Downloader,
   archive extraction, installation, health, repair, other advertised targets,
   and setup events remain.
-- `P3F.1`: Rust protocol parser exists. `P3F.2` process/event integration
-  remains; the visible frontend still uses `CHUNK_RE`.
+- `P3F.1`/`P3F.2`: Rust now launches the engine with NDJSON progress, bridges
+  typed events to the frontend, persists per-run recipe/cancel controls, and
+  emits a typed terminal payload. Tool-readiness gating remains P3E.4; durable
+  multi-job orchestration remains D3/D4.
 - `P3G.1`: frontend render reducer exists. Setup/render DOM integration remains.
-- `P3H.1`: engine cancellation foundations exist. Desktop cancel marker,
-  cooperative grace period, and durable cancellation UX remain.
+- `P3H.1`: engine cancellation foundations exist. The active-render desktop
+  bridge now writes a cancel marker, waits a bounded grace period, and only
+  then force-stops the process. Durable cancellation/history UX remains D3/D4.
 - Recipe types are still hand-maintained. C3 owns schema generation and client
   validation; unrelated packets must not invent another solution.
 - `ruff format --check` remains intentionally outside the gate until a separate
@@ -641,16 +644,17 @@ This is an orientation snapshot, not substitute for source verification.
 | P3C | C1 | done | engine NDJSON reporter/integration present |
 | P3D | B2 | partial | sidecar/runtime present; packaged E2E pending |
 | P3E | B3–B4 | partial | manifest parser/Windows pins only |
-| P3F | D1 | partial | typed parser present; process bridge pending |
+| P3F | D1 | partial | typed process/event bridge present; readiness gate and durable job service pending |
 | P3G | B5/X8 | partial | reducer present; setup UI pending |
-| P3H | D2 | partial | engine cooperative cancel present; desktop half pending |
+| P3H | D2 | partial | engine and active-render cooperative cancel present; durable job-state recovery pending |
 | P3I | B6/V | planned | depends on setup and desktop cancellation |
 | P3J | B7 | planned | explicitly optional after online bootstrap |
 | P4A | R1 | done | root VERSION and synchronization present |
 | P4B–P4D | R2–R4 | planned | wait for packaged flow |
 | P5A | C6/R5 | planned | capabilities contracts should land first |
 | P5B–P5C | R5–R6 | planned | behavior/release URLs pending |
-| C2–C9 | C | planned | new GUI-enabling engine contracts |
+| C2 | C | partial | normalized media contract and `--inspect`/`--inspect-json` exist; subcommand/export hardening remains |
+| C3–C9 | C | planned | remaining GUI-enabling engine contracts |
 | D3–D6 | D | planned | durable job/preview/history services |
 | X1–X9 | X | planned | workstation experience |
 | V1–V4 | V | planned | cross-layer story gates |
@@ -927,7 +931,8 @@ output.
 
 ### P3F - Integrate Runtime, Tools, And Progress In Rust
 
-**Status:** partial; P3F.1 parser exists, P3F.2 orchestration remains.
+**Status:** partial; P3F.1 and the typed P3F.2 render bridge are complete.
+Tool-readiness gating remains P3E.4 and durable jobs remain D3.
 
 **Goal:** make Rust a typed orchestration bridge rather than a log scraper.
 
@@ -1007,7 +1012,8 @@ output.
 
 ### P3H - Add Cooperative, Resumable Cancellation
 
-**Status:** partial; engine behavior exists, desktop P3H.2 remains.
+**Status:** partial; engine cancellation and the active-render desktop cancel
+marker/grace path exist. Durable job-state cancellation remains D3/D4.
 
 **Goal:** cancel without immediately corrupting resumable work.
 
@@ -1330,7 +1336,9 @@ All JSON commands follow these rules:
 
 ### C2 - Normalized Source Inspection
 
-**Status:** ready; C2.1 is the first assignable leaf.
+**Status:** partial; C2.1/C2.2 and a flag-based C2.3 path are complete. C8
+will promote the flags to the subcommand surface, and C2.4 needs the broader
+HDR/silent/VFR fixture corpus.
 
 **Outcome:** `auvide inspect INPUT --json` is the sole source-metadata contract.
 
@@ -1345,16 +1353,18 @@ All JSON commands follow these rules:
 
 ### C3 - Versioned Recipe And Schema
 
-**Status:** ready; C3.1 and C3.2 may be split after agreeing the envelope name.
+**Status:** in progress. C3.1 is complete; C3.2 and C3.3 have a minimal
+engine export in the existing config response, with richer metadata, fixtures,
+and a dedicated query command still pending.
 
 **Outcome:** saved recipes are portable and clients no longer infer field
 metadata or maintain unvalidated types.
 
 | Leaf | Primary files | Work | Done when |
 |---|---|---|---|
-| C3.1 recipe envelope | `recipe.py`, `test_recipe.py`, fixtures | Read/write `auvide.recipe` v1 envelope while retaining legacy unwrapped input; define migration result/warnings | old recipes load; new recipes round-trip; incompatible versions fail clearly |
-| C3.2 field metadata | new `engine/src/auvide/schema.py`, `test_schema.py` | Describe field type, default, enum/range/step, section, label, help, advanced flag, dependencies and visibility | metadata covers every `Recipe` field exactly once |
-| C3.3 schema/config export | new `commands/config.py`, narrow CLI registration, fixtures | Add config/schema query output and retain `--dump-config` compatibility | fixture is deterministic; enum/defaults match runtime recipe |
+| C3.1 recipe envelope | `recipe.py`, `test_recipe.py`, fixtures | Read/write `auvide.recipe` v1 envelope while retaining legacy unwrapped input; define migration result/warnings | **Complete:** old recipes load; new recipes round-trip; incompatible versions fail clearly |
+| C3.2 field metadata | `recipe.py`, `test_recipe.py` (later extract `schema.py`) | Describe field type, default, enum/range/step, section, label, help, advanced flag, dependencies and visibility | **Partial:** every current `Recipe` field is enumerated with default/type/section and available enums; help, step, dependencies, and visibility remain |
+| C3.3 schema/config export | `cli.py`, config fixture/tests | Add config/schema query output and retain `--dump-config` compatibility | **Partial:** `--dump-config` includes `recipe_schema`; add deterministic fixture and a dedicated public config/schema command |
 | C3.4 client generation | new `desktop/scripts/generate-contracts.mjs`, generated-contract test, package script | Generate TypeScript types or validators from reviewed fixtures/schema; fail on drift | `bun run generate-contracts --check` is deterministic and CI-ready |
 | C3.5 migration corpus | recipe fixtures/tests only | Add current, legacy, additive-future, missing-field and incompatible fixtures | Python and TypeScript validators agree on every fixture |
 

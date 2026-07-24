@@ -18,6 +18,15 @@ main { padding: 14px 18px; display: flex; flex-direction: column; gap: 10px; }
 .row { display: flex; align-items: center; gap: 8px; }
 .row label { width: 56px; color: var(--muted); }
 .row input { flex: 1; }
+.source-summary {
+  display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  color: var(--muted); font-size: 12px; min-height: 38px; padding: 8px 12px;
+}
+.source-summary.ready { color: var(--text); }
+.source-summary.err { border-color: var(--err); color: var(--err); }
+.source-summary .meta { color: var(--text); }
+.source-summary .warning { color: #e9bd68; }
 input, select, button {
   background: var(--field); color: var(--text);
   border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; font: inherit;

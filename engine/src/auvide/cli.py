@@ -35,10 +35,8 @@ import time
 from pathlib import Path
 from typing import NoReturn
 
-from . import grade
+from . import grade, media, stages, tools
 from . import recipe as recipes
-from . import stages
-from . import tools
 from .progress import Reporter
 
 # CWD, not the installed package's location: `input/`/`output/` are a
@@ -127,39 +125,10 @@ def check_deps() -> None:
 
 
 def probe(src: Path) -> dict:
-    out = subprocess.run(
-        [str(tools.ffprobe()), "-v", "error", "-print_format", "json",
-         "-show_streams", "-show_format", str(src)],
-        capture_output=True, text=True)
-    if out.returncode != 0:
-        die(f"ffprobe failed:\n{out.stderr}")
-    data = json.loads(out.stdout)
-    vstream = next((s for s in data["streams"] if s["codec_type"] == "video"), None)
-    astream = next((s for s in data["streams"] if s["codec_type"] == "audio"), None)
-    if vstream is None:
-        die("no video stream found in input")
-
-    num, den = (vstream.get("r_frame_rate", "24/1").split("/") + ["1"])[:2]
-    fps_num, fps_den = int(num), int(den or 1)
-    fps = fps_num / fps_den
-
-    nb = vstream.get("nb_frames")
-    if nb and nb.isdigit() and int(nb) > 0:
-        total = int(nb)
-    else:
-        dur = float(vstream.get("duration") or data["format"].get("duration") or 0)
-        total = int(round(dur * fps)) if dur else 0
-
-    return {
-        "width": int(vstream["width"]),
-        "height": int(vstream["height"]),
-        "fps_num": fps_num,
-        "fps_den": fps_den,
-        "fps": fps,
-        "total": total,
-        "has_audio": astream is not None,
-        "duration": float(data["format"].get("duration") or 0),
-    }
+    try:
+        return media.inspect(src).render_info()
+    except media.MediaError as error:
+        die(str(error))
 
 
 def resolve_grade(args) -> grade.Grade:
@@ -420,6 +389,10 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true", help="print the plan and exit")
     ap.add_argument("--dump-config", action="store_true", dest="dump_config",
                     help=argparse.SUPPRESS)   # emit styles/targets/knobs as JSON (for GUIs)
+    ap.add_argument("--inspect", action="store_true",
+                    help="show normalized source metadata and exit")
+    ap.add_argument("--inspect-json", action="store_true", dest="inspect_json",
+                    help="emit normalized source metadata as JSON and exit")
     ap.add_argument("--progress-json", action="store_true",
                     help="emit versioned NDJSON progress events on stdout")
     ap.add_argument("--run-id", help=argparse.SUPPRESS)
@@ -434,8 +407,8 @@ def main() -> None:
         die("--cancel-file must be an absolute path")
     stages.set_cancel_checker(cancel_requested)
 
-    if args.dump_config and args.progress_json:
-        die("--dump-config cannot be combined with --progress-json")
+    if (args.dump_config or args.inspect_json) and args.progress_json:
+        die("--dump-config and --inspect-json cannot be combined with --progress-json")
     if args.progress_json:
         # Keep legacy print calls readable while reserving original stdout for
         # NDJSON events. Reporter captured stdout before this redirection.
@@ -448,7 +421,20 @@ def main() -> None:
             "targets": list(recipes.TARGETS.keys()),
             "grade_knobs": list(recipes.GRADE_KNOBS),
             "models": list(MODEL_MAP.keys()),
+            "recipe_schema": recipes.schema(list(MODEL_MAP)),
         }))
+        return
+
+    if args.inspect or args.inspect_json:
+        src = resolve_input(args.input)
+        try:
+            inspection = media.inspect(src)
+        except media.MediaError as error:
+            die(str(error))
+        if args.inspect_json:
+            print(json.dumps(inspection.to_dict(), indent=2))
+        else:
+            print(media.format_human(inspection))
         return
 
     # recipe / style overlay (explicit flags always win)
@@ -497,7 +483,7 @@ def main() -> None:
         for i, v in enumerate(vids, 1):
             print(f"\n===== batch {i}/{len(vids)}: {v.name} =====", flush=True)
             r = subprocess.run([sys.executable, "-m", "auvide.cli", str(v)]
-                               + passthrough)
+                               + passthrough, check=False)
             if r.returncode != 0:
                 print(f"[batch] {v.name} failed (exit {r.returncode}) — continuing")
         print("\n[batch] done")
@@ -533,9 +519,9 @@ def main() -> None:
     # effective (possibly trimmed) frame count
     expected = info["total"]
     if args.duration:
-        expected = min(expected, int(round(args.duration * info["fps"])))
+        expected = min(expected, round(args.duration * info["fps"]))
     elif args.start:
-        expected = max(1, expected - int(round(args.start * info["fps"])))
+        expected = max(1, expected - round(args.start * info["fps"]))
     n_chunks = math.ceil(expected / args.chunk)
     progress_stages = []
     if args.stabilize:

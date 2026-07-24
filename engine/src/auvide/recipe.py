@@ -9,15 +9,24 @@ the `frame_ops`, `lut`, and `target` fields are reserved for the stage engine
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field, replace
+from typing import Any
 
 from . import grade
-from .grade import Grade as _Grade  # unambiguous name for use inside Recipe,
+from .grade import Grade as _Grade
+
 # whose own `grade: dict` field shadows the `grade` module name in class scope
 # for static type-checkers (harmless at runtime; mypy still trips on it).
 
 GRADE_KNOBS = ("saturation", "vibrance", "contrast", "gamma", "warmth",
                "sharpen", "exposure", "tint")
+RECIPE_SCHEMA = "auvide.recipe"
+RECIPE_VERSION = 1
+
+
+class RecipeFormatError(ValueError):
+    """A recipe document cannot be safely interpreted by this engine."""
 
 
 def grade_dict(name: str, **over) -> dict:
@@ -98,19 +107,96 @@ def target_transform(name, src_w, src_h):
         return f, (w, h)
     if "max_h" in t and src_h > t["max_h"]:
         mh = t["max_h"]
-        w = int(round(src_w * mh / src_h / 2)) * 2       # keep width even
+        w = round(src_w * mh / src_h / 2) * 2            # keep width even
         return f"scale={w}:{mh}:flags=lanczos", (w, mh)
     return "", (src_w, src_h)
 
 
+def to_dict(recipe: Recipe) -> dict:
+    """Return the stable payload shared by recipe files and GUI contracts."""
+    return asdict(recipe)
+
+
+def envelope(recipe: Recipe) -> dict:
+    """Wrap a recipe in a versioned document suitable for persistence."""
+    return {
+        "schema": RECIPE_SCHEMA,
+        "version": RECIPE_VERSION,
+        "recipe": to_dict(recipe),
+    }
+
+
+def schema(model_options: Sequence[str] | None = None) -> dict[str, Any]:
+    """Describe editable recipe fields for clients without duplicating defaults.
+
+    This is intentionally descriptive rather than a validation substitute: the
+    CLI remains the authority that validates values at render time.
+    """
+    defaults = to_dict(Recipe())
+    fields: list[dict[str, Any]] = [
+        {"key": "scale", "label": "Scale", "type": "integer", "section": "Enhance",
+         "options": [2, 3, 4]},
+        {"key": "model", "label": "AI model", "type": "string", "section": "Enhance",
+         "options": list(model_options or [])},
+        {"key": "hdr", "label": "HDR output", "type": "enum", "section": "Color",
+         "options": ["on", "off"]},
+        {"key": "encoder", "label": "Encoder", "type": "enum", "section": "Export",
+         "options": ["x265", "qsv"]},
+        {"key": "crf", "label": "Quality (CRF)", "type": "integer", "section": "Export",
+         "minimum": 0, "maximum": 51},
+        {"key": "preset", "label": "Encoder preset", "type": "string", "section": "Export"},
+        {"key": "hdr_gain", "label": "HDR gain", "type": "number", "section": "Color",
+         "minimum": 0.0},
+        {"key": "grade", "label": "Grade", "type": "object", "section": "Color"},
+        {"key": "trim_start", "label": "Trim start", "type": "number", "section": "Timeline",
+         "minimum": 0.0},
+        {"key": "trim_dur", "label": "Trim duration", "type": "number", "section": "Timeline",
+         "minimum": 0.0},
+        {"key": "audio", "label": "Keep audio", "type": "boolean", "section": "Audio"},
+        {"key": "interpolate", "label": "Interpolation", "type": "integer", "section": "Enhance",
+         "options": [0, 2, 3, 4]},
+        {"key": "slowmo", "label": "Slow motion", "type": "boolean", "section": "Enhance"},
+        {"key": "deinterlace", "label": "Deinterlace", "type": "boolean", "section": "Restore"},
+        {"key": "denoise", "label": "Denoise", "type": "enum", "section": "Restore",
+         "options": ["off", "light", "medium", "strong"]},
+        {"key": "stabilize", "label": "Stabilize", "type": "boolean", "section": "Restore"},
+        {"key": "lut", "label": "LUT", "type": "string", "section": "Color", "advanced": True},
+        {"key": "target", "label": "Delivery target", "type": "string", "section": "Export",
+         "options": list(TARGETS)},
+        {"key": "curve", "label": "Master curve", "type": "string", "section": "Color", "advanced": True},
+    ]
+    for item in fields:
+        item["default"] = defaults[item["key"]]
+    return {
+        "schema": "auvide.recipe-schema",
+        "version": 1,
+        "recipe_schema": RECIPE_SCHEMA,
+        "recipe_version": RECIPE_VERSION,
+        "fields": fields,
+    }
+
+
 def save(recipe: Recipe, path) -> None:
     from pathlib import Path
-    Path(path).write_text(json.dumps(asdict(recipe), indent=2))
+    Path(path).write_text(json.dumps(envelope(recipe), indent=2))
 
 
 def load(path) -> Recipe:
     from pathlib import Path
-    return Recipe(**json.loads(Path(path).read_text()))
+    document = json.loads(Path(path).read_text())
+    if not isinstance(document, dict):
+        raise RecipeFormatError("recipe document must be a JSON object")
+    if "schema" in document or "version" in document or "recipe" in document:
+        if document.get("schema") != RECIPE_SCHEMA:
+            raise RecipeFormatError(f"unsupported recipe schema: {document.get('schema')!r}")
+        if document.get("version") != RECIPE_VERSION:
+            raise RecipeFormatError(f"unsupported recipe version: {document.get('version')!r}")
+        document = document.get("recipe")
+        if not isinstance(document, dict):
+            raise RecipeFormatError("recipe envelope requires an object in 'recipe'")
+    # Flat objects are the pre-versioned format and remain supported so old
+    # saved recipes and hand-authored GUI files keep working.
+    return Recipe(**document)
 
 
 def apply_to_args(recipe: Recipe, args, given: set) -> None:

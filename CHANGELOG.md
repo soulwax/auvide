@@ -9,6 +9,11 @@ and uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `auvide --inspect` and `auvide --inspect-json` expose normalized source
+  metadata for desktop and automation clients.
+- Saved recipes now use the versioned `auvide.recipe` v1 envelope while
+  continuing to load legacy flat JSON recipes. `--dump-config` now includes
+  engine-owned `auvide.recipe-schema` metadata for every recipe field.
 - A version synchronization check for Python, npm, Cargo, and Tauri metadata.
 - Cooperative, resumable render cancellation and versioned NDJSON progress
   events for engine consumers.
@@ -38,6 +43,10 @@ and uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Desktop product identity is `auvide` with the stable identifier
   `com.soulwax.auvide`.
 - Tool discovery now supports managed desktop runtime and model overrides.
+- Desktop renders now consume typed NDJSON progress and terminal events instead
+  of parsing human log text. Each run stores its recipe and cooperative cancel
+  marker under app data; cancellation waits for an engine checkpoint before a
+  forced process stop.
 
 ## 0.2.0
 

@@ -1,0 +1,23 @@
+{
+  "schema": "auvide.media",
+  "version": 1,
+  "path": "SOURCE_PATH",
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "fps": {"numerator": 30000, "denominator": 1001},
+    "frames": 18000,
+    "duration_seconds": 600.6,
+    "codec": "h264",
+    "pixel_format": "yuv420p",
+    "bit_depth": 8,
+    "color_primaries": "bt709",
+    "transfer": "bt709",
+    "color_space": "bt709",
+    "interlaced": false,
+    "variable_frame_rate": false
+  },
+  "audio": {"present": true, "codec": "aac", "channels": 2},
+  "container": {"format": "mov,mp4,m4a,3gp,3g2,mj2", "size_bytes": 123456789},
+  "warnings": []
+}

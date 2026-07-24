@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 
 import pytest
 
@@ -64,8 +65,10 @@ def test_save_and_load_round_trip(tmp_path):
     recipe.save(original, path)
 
     loaded_raw = json.loads(path.read_text())
-    assert loaded_raw["scale"] == 4
-    assert loaded_raw["target"] == "reel"
+    assert loaded_raw["schema"] == recipe.RECIPE_SCHEMA
+    assert loaded_raw["version"] == recipe.RECIPE_VERSION
+    assert loaded_raw["recipe"]["scale"] == 4
+    assert loaded_raw["recipe"]["target"] == "reel"
 
     loaded = recipe.load(path)
     assert loaded == original
@@ -78,6 +81,42 @@ def test_load_unknown_keys_raise_typeerror(tmp_path):
     path.write_text(json.dumps({"scale": 2, "not_a_real_field": True}))
     with pytest.raises(TypeError):
         recipe.load(path)
+
+
+def test_load_legacy_flat_recipe(tmp_path):
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps({"scale": 3, "hdr": "off"}))
+    assert recipe.load(path) == recipe.Recipe(scale=3, hdr="off")
+
+
+def test_loads_recipe_v1_contract_fixture(tmp_path):
+    fixture = Path(__file__).parent / "fixtures" / "contracts" / "recipe_v1.json"
+    path = tmp_path / "recipe.json"
+    path.write_text(fixture.read_text())
+    loaded = recipe.load(path)
+    assert loaded == recipe.Recipe(scale=4, model="x4plus", hdr="off", crf=21, target="reel")
+
+
+@pytest.mark.parametrize("document", [
+    {"schema": "another.recipe", "version": 1, "recipe": {}},
+    {"schema": recipe.RECIPE_SCHEMA, "version": 99, "recipe": {}},
+    {"schema": recipe.RECIPE_SCHEMA, "version": 1, "recipe": []},
+])
+def test_load_rejects_incompatible_envelopes(tmp_path, document):
+    path = tmp_path / "bad-envelope.json"
+    path.write_text(json.dumps(document))
+    with pytest.raises(recipe.RecipeFormatError):
+        recipe.load(path)
+
+
+def test_schema_describes_recipe_defaults():
+    document = recipe.schema(["animevideo", "x4plus"])
+    fields = {field["key"]: field for field in document["fields"]}
+    assert document["recipe_schema"] == recipe.RECIPE_SCHEMA
+    assert fields["scale"]["default"] == recipe.Recipe().scale
+    assert fields["denoise"]["options"] == ["off", "light", "medium", "strong"]
+    assert fields["model"]["options"] == ["animevideo", "x4plus"]
+    assert fields["target"]["options"] == list(recipe.TARGETS)
 
 
 class TestTargets:

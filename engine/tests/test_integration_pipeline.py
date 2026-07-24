@@ -79,7 +79,7 @@ def ffprobe_json(path: Path) -> dict:
 def run_cli(args, cwd, env):
     return subprocess.run(
         [sys.executable, "-m", "auvide.cli", *args],
-        cwd=str(cwd), env=env, capture_output=True, text=True)
+        cwd=str(cwd), env=env, capture_output=True, text=True, check=False)
 
 
 @pytest.fixture
@@ -88,6 +88,19 @@ def env_with_fake_tools(fake_realesrgan_on_path, monkeypatch):
     env["PATH"] = str(fake_realesrgan_on_path) + os.pathsep + env.get("PATH", "")
     env["LOCALAPPDATA"] = str(fake_realesrgan_on_path)  # tools.py's APP_CACHE fallback, unused here
     return env
+
+
+def test_inspect_json_exposes_normalized_media(synthetic_clip, tmp_path):
+    result = run_cli([str(synthetic_clip), "--inspect-json"], cwd=tmp_path, env=dict(os.environ))
+
+    assert result.returncode == 0, result.stderr
+    inspection = json.loads(result.stdout)
+    assert inspection["schema"] == "auvide.media"
+    assert inspection["version"] == 1
+    assert inspection["video"]["width"] == 64
+    assert inspection["video"]["height"] == 64
+    assert inspection["video"]["fps"] == {"numerator": 24, "denominator": 1}
+    assert inspection["audio"]["present"] is True
 
 
 def test_hdr10_render_end_to_end(synthetic_clip, tmp_path, env_with_fake_tools):

@@ -147,7 +147,8 @@ The legacy GUI remains available through **`desktop/run-gui.bat`**. Two tabs:
   detail before committing, and **Scopes** for a live waveform + vectorscope.
   The grade you tune is exactly what the render applies (both use `grade.py`).
 - The **Style** chips (top) apply whole looks one-tap; the **Pipeline** line
-  shows the active stage chain; **Save/Load recipe** persists a full job as JSON.
+  shows the active stage chain; **Save/Load recipe** persists a full job as a
+  versioned JSON document. Older flat recipe JSON remains supported on load.
 
 No GUI? Get the same comparison from the CLI without a full run:
 
@@ -168,7 +169,7 @@ auvide --preview --at 25,95 # at chosen seconds -> output/preview/
 | `--deinterlace` | | restore: deinterlace (bwdif) |
 | `--denoise {off,light,medium,strong}` | `off` | restore: denoise before upscaling |
 | `--stabilize` | | restore: stabilize shaky footage (vidstab, 2-pass) |
-| `--recipe FILE` / `--save-recipe FILE` | | load / save a full job recipe (`.json`) |
+| `--recipe FILE` / `--save-recipe FILE` | | load a legacy or versioned job recipe / save a versioned full-job recipe (`.json`) |
 | `--scale {2,3,4}` | `2` | upscale factor |
 | `--model {animevideo,x4plus,x4plus-anime}` | `animevideo` | `animevideo` = fast, denoises, best for real video; `x4plus` = sharper photographic detail |
 | `--vibrance {none,subtle,vibrant,max}` | `vibrant` | grade **preset** — the base for the knobs below |
@@ -186,6 +187,7 @@ auvide --preview --at 25,95 # at chosen seconds -> output/preview/
 | `--preview` | | render before/after grade stills to `output/preview/`, then exit |
 | `--at S,S,…` | *(20/50/80%)* | timestamps (seconds) for `--preview` |
 | `--upscale` | | with `--preview`: AI-upscale the "after" half (see real detail) |
+| `--inspect` / `--inspect-json` | | show normalized source metadata for people / JSON clients, then exit |
 | `--start S` / `--duration S` | | trim: render only a section (great for tests) |
 | `--no-audio` | | drop the audio track |
 | `--batch` | | render every video in `input/` sequentially |

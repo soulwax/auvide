@@ -22,6 +22,11 @@ export interface ProgressEnvelope {
   event: ProgressEvent;
 }
 
+export interface RenderExited {
+  run_id: string;
+  exit_code: number;
+}
+
 export type RenderPhase = "idle" | "running" | "completed" | "cancelled" | "failed";
 
 export interface RenderState {
@@ -47,7 +52,8 @@ export const initialRenderState: RenderState = {
 export type RenderAction =
   | { type: "started"; runId: string }
   | { type: "progress"; envelope: ProgressEnvelope }
-  | { type: "exited"; exitCode: number };
+  | { type: "exited"; exit: RenderExited }
+  | { type: "launch_failed"; runId: string; message: string };
 
 export function reduceRenderState(state: RenderState, action: RenderAction): RenderState {
   switch (action.type) {
@@ -62,7 +68,11 @@ export function reduceRenderState(state: RenderState, action: RenderAction): Ren
       if (state.phase !== "running" || state.runId !== action.envelope.run_id) return state;
       return applyProgressEvent(state, action.envelope.event);
     case "exited":
-      return applyExitCode(state, action.exitCode);
+      if (state.runId !== action.exit.run_id) return state;
+      return applyExitCode(state, action.exit.exit_code);
+    case "launch_failed":
+      if (state.runId !== action.runId) return state;
+      return { ...state, phase: "failed", status: action.message };
   }
 }
 

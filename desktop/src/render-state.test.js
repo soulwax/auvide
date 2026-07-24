@@ -55,7 +55,10 @@ describe("reduceRenderState", () => {
   });
 
   test("requires a completion event for a successful process exit", () => {
-    const failed = reduceRenderState(started(), { type: "exited", exitCode: 0 });
+    const failed = reduceRenderState(started(), {
+      type: "exited",
+      exit: { run_id: runId, exit_code: 0 },
+    });
     expect(failed.phase).toBe("failed");
 
     const completed = reduceRenderState(started(), {
@@ -67,6 +70,25 @@ describe("reduceRenderState", () => {
         event: { type: "completed", output: "out.mp4" },
       },
     });
-    expect(reduceRenderState(completed, { type: "exited", exitCode: 0 }).phase).toBe("completed");
+    expect(reduceRenderState(completed, {
+      type: "exited",
+      exit: { run_id: runId, exit_code: 0 },
+    }).phase).toBe("completed");
+  });
+
+  test("ignores terminal exits from another render and keeps launch errors typed", () => {
+    const state = started();
+    expect(reduceRenderState(state, {
+      type: "exited",
+      exit: { run_id: "other-run", exit_code: 1 },
+    })).toBe(state);
+
+    const failed = reduceRenderState(state, {
+      type: "launch_failed",
+      runId,
+      message: "Could not start render.",
+    });
+    expect(failed.phase).toBe("failed");
+    expect(failed.status).toBe("Could not start render.");
   });
 });

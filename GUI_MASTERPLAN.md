@@ -31,18 +31,24 @@ sliders.” It is a better product surface around the engine:
 
 1. Make setup, source analysis, and safe defaults effortless.
 2. Make the visual result inspectable before a long render.
-3. Replace the single transient render with a persistent queue and history.
-4. Expose simple controls first and reveal expert controls progressively.
-5. Make every GUI operation available through a stable, machine-readable CLI
+3. Make a user-selected project folder the persistent home for imported-media
+   records, settings, timeline edits, conversion state, and job history.
+4. Add a focused clip-assembly timeline: external audio, detachable audio/video,
+   cuts/trims, and rearrangement.
+5. Replace the single transient render with a persistent queue and history.
+6. Expose simple controls first and reveal expert controls progressively.
+7. Make every GUI operation available through a stable, machine-readable CLI
    contract so the desktop app, scripts, and future integrations behave alike.
 
 The recommended desktop information architecture is:
 
 ```text
 Setup / Home
+    -> Default project chooser modal
+         recent workspaces | New Project | Open Folder
     -> Import and source analysis
-    -> Enhance workspace
-         Preview | Restore | Upscale | Motion | Color
+    -> Edit and Enhance workspace
+         Media | Timeline | Preview | Restore | Upscale | Motion | Color
     -> Export
          format | quality | target | destination
     -> Queue
@@ -51,10 +57,10 @@ Setup / Home
          inspect | reveal | rerun | duplicate recipe
 ```
 
-The first milestone should not attempt a full nonlinear editor. It should
-deliver a polished single-clip workflow, typed progress, full recipe coverage,
-real previews, and an honest preflight estimate. Queue/history and batch
-workflows follow once one job is reliable.
+The editor remains intentionally smaller than a full nonlinear editor. The
+first editing milestone covers project persistence, a media bin, video/audio
+tracks, external audio import, detach, split/trim, and rearrangement. It does
+not include transitions, titles, effect keyframes, or a mixing console.
 
 ### 1.1 Alignment with the portfolio roadmap
 
@@ -70,7 +76,8 @@ This plan uses the general masterplan's workstream IDs:
 | Real preview | C5, D5, X4 | 0.4 |
 | Plan, capabilities, preflight | C4, C6, X5 | 0.4 |
 | Durable jobs, queue, and history | C7, D3–D4, D6, X6–X7 | 0.5 |
-| Advanced progress and creative tools | C9, X9 | 0.5+ |
+| Project folders and basic timeline editing | C10, D8, X9 | 0.5 |
+| Advanced progress and creative tools | C9, X10 | 0.5+ |
 | Updates, signing, and distribution | R1–R6, X8 | 0.3–1.0 |
 
 The phases in Section 8 are experience increments, not a second independent
@@ -114,9 +121,9 @@ The active Tauri UI currently behaves like a compact parameter form:
   drop, recent files, batch import, a job queue, or render history.
 - The interface disables itself around one running process and does not persist
   job state across app restarts.
-- The visible frontend still infers progress from human log strings such as
-  `chunk N/M`, even though typed progress parsing and a tested frontend state
-  reducer now exist.
+- The desktop now consumes typed progress and terminal events through the
+  existing reducer; human logs are diagnostics only. Durable queue/history
+  state remains a later job-service milestone.
 - Advanced errors are mostly “see log”; there is no guided recovery for missing
   tools, VRAM failures, unsupported codecs, disk pressure, or interrupted jobs.
 - The fixed 1080 × 820 form has only limited layout adaptation and no explicit
@@ -127,7 +134,9 @@ The active Tauri UI currently behaves like a compact parameter form:
 The CLI has broad render flags, but most non-render operations are modes on one
 large `argparse` parser. The desktop app needs additional stable contracts:
 
-- Structured source probing, not direct `ffprobe` interpretation in the GUI.
+- Structured source probing now exists as `auvide.media` and is used by the
+  desktop metadata summary; richer import, thumbnail, and workspace flows
+  remain pending.
 - Structured effective-plan output, including resolved dimensions, frame rate,
   output color mode, stages, warnings, disk estimate, and capability checks.
 - A versioned schema for recipe/config fields so TypeScript does not mirror the
@@ -182,6 +191,22 @@ distinguish:
 - Stop and discard temporary work.
 - Remove a queued job that has not started.
 
+### 3.6 The project folder is the workspace
+
+A project is a user-selected folder, not transient application state. Opening
+that folder must restore its imported-media registry, edit timeline, overall
+settings, preview context, queue, completed/failed/interrupted conversion
+status, and history. Portable project data is versioned and atomically saved;
+regenerable thumbnails, waveforms, proxies, and previews are clearly separated
+from durable state.
+
+### 3.7 Editing stays focused
+
+The timeline exists to prepare clips for enhancement and delivery. Its first
+contract is deliberately finite: add media, add external audio, detach linked
+audio/video, split or trim clips, delete them, and rearrange them on video/audio
+tracks. These operations must share undo/redo and preview/render semantics.
+
 ## 4. Target User Experience
 
 ### 4.1 First launch and environment health
@@ -207,8 +232,33 @@ Acceptance criteria:
 
 ### 4.2 Home and import
 
-The Home screen should have a large drop zone, **Choose videos**, recent jobs,
-and environment health in a small status area.
+When no project is open, the GUI defaults to a project chooser modal rather
+than an empty editor. Its main pane presents **New Project** and **Open
+Folder**. A side pane lists recently opened project workspaces, most recent
+first, with project name, folder path, last-opened time, and missing/offline
+state. Selecting a valid recent entry opens it directly.
+
+The modal:
+
+- Appears on first launch, normal launch with no restorable project, and after
+  **Close Project**.
+- **New Project** asks for a new or empty folder and initializes the versioned
+  workspace only after confirmation. **Open Folder** validates an existing
+  `auvide.project.json`; an ordinary folder is never modified unless the user
+  explicitly chooses to initialize it as a project.
+- Keeps the recent-workspace list visible at the side on desktop widths and
+  collapses it into an accessible secondary pane at the minimum width.
+- Supports keyboard navigation, Enter to open, and context actions to reveal,
+  locate a moved folder, or remove an entry from recents without deleting it.
+- Does not treat dismissing the modal as a usable empty workspace. If global
+  Settings/About remain reachable behind it, project actions stay disabled.
+- May offer **Reopen last project** after an unclean shutdown, but must first
+  perform normal workspace and conversion-state reconciliation.
+
+After a project opens, its workspace shows a large import drop zone, project
+jobs, and environment health in a small status area. Dropping a recognized
+project folder while another project is open requests a save/close transition;
+dropping media imports it into the current project.
 
 After import, asynchronously display:
 
@@ -223,26 +273,26 @@ After import, asynchronously display:
 Support:
 
 - Drag/drop one or many files.
+- Import common standalone audio, including MP3, AAC/M4A, WAV, and FLAC.
 - Open-with/file-association flow.
-- Recent folders.
+- Recent project folders, with missing/moved entries removable or locatable.
 - Duplicate detection in the current queue.
 - Keyboard paste of a local file path.
 
-### 4.3 Enhance workspace
+### 4.3 Edit and enhance workspace
 
 Use a three-region layout:
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────┐
-│ App bar: project name | save recipe | undo/redo | help              │
+│ App bar: project folder | saved/saving | undo/redo | help           │
 ├──────────────┬───────────────────────────────────┬───────────────────┤
-│ Tool rail    │ Preview                           │ Inspector         │
-│              │ before/after / split / zoom       │ Simple controls   │
-│ Enhance      │                                   │ + Advanced        │
-│ Restore      │ Timeline scrubber / sample points │                   │
-│ Motion       │                                   │                   │
-│ Color        │                                   │                   │
-│ Export       │                                   │                   │
+│ Media bin /  │ Preview                           │ Inspector         │
+│ Tool rail    │ before/after / split / zoom       │ Clip or enhance   │
+│              │                                   │ controls          │
+│ Edit         │ V1 [video clips..............]    │ + Advanced        │
+│ Enhance      │ A1 [linked audio....][MP3....]    │                   │
+│ Export       │ time ruler / playhead / zoom      │                   │
 ├──────────────┴───────────────────────────────────┴───────────────────┤
 │ Job summary: output · estimate · warnings             Add to Queue  │
 └──────────────────────────────────────────────────────────────────────┘
@@ -250,6 +300,26 @@ Use a three-region layout:
 
 The layout should collapse to preview + a slide-over inspector at narrower
 window sizes. It must remain usable at the configured minimum window size.
+
+#### Media bin and timeline
+
+- Every imported video or audio asset appears in the project media bin with
+  online/offline, linked/managed, duration, format, and usage state.
+- Dropping a video on the timeline creates linked video and audio clips when
+  the source contains audio. Linked selection and movement preserve sync.
+- **Detach audio** converts that pair into independently selectable audio and
+  video clips at the same timeline position without transcoding the source.
+- Standalone audio such as MP3 can be placed on an audio track, moved, trimmed,
+  split, deleted, and rearranged like detached source audio.
+- Split at the playhead, trim handles, delete, drag-to-reorder, snapping, and
+  keyboard-accessible equivalents form the minimum edit toolset.
+- Edits are non-destructive references to source time ranges. A cut never
+  modifies or overwrites imported media.
+- Preview, preflight, resume compatibility, and final render consume the same
+  saved timeline revision. A queued job records an immutable snapshot so later
+  edits cannot change a running conversion.
+- Overlapping video clips, transitions, titles, keyframed effects, nested
+  sequences, and advanced mixing are explicitly outside the first editor.
 
 #### Preview modes
 
@@ -307,7 +377,45 @@ Every numeric control should support:
 - Accessible name and current value.
 - Optional fine adjustment with keyboard modifiers.
 
-### 4.4 Preflight and export
+### 4.4 Project workspace persistence
+
+The user can choose any writable folder as a project workspace. A valid folder
+contains:
+
+```text
+project-folder/
+  auvide.project.json       project identity, schema, settings, status index
+  media.json                imported-media records and fingerprints
+  timeline.json             tracks, clips, links, source ranges, ordering
+  media/                    optional project-managed source copies
+  exports/                  default output destination
+  .auvide/
+    autosave/               recoverable pending edits
+    cache/                  disposable thumbnails/waveforms/proxies/previews
+    jobs/<job-id>/          immutable submissions, state, events, logs
+```
+
+Import offers or remembers two explicit modes: **Link in place** and **Copy
+into project**. Linked paths may be absolute, but retain fingerprints and
+relative hints for relinking. Managed media uses relative paths so the project
+folder can be moved as a unit. The app never copies large media silently.
+
+Autosave durable edits after a short debounce and show `Saving`, `Saved`, or
+`Save failed`. Use atomic replacement plus recovery copies. On open:
+
+- Validate and migrate supported schema versions without losing unknown fields.
+- Reconcile any job marked running with actual process/checkpoint state.
+- Mark unavailable linked assets offline and offer Locate/Relink.
+- Detect a concurrent writer and open read-only or offer an explicit recovery
+  flow.
+- Restore the last playhead, selection, panel layout, and preview target as
+  convenience state without confusing it with render settings.
+
+The recent-project side list is an app-level index of workspace pointers and
+display metadata only. The project folder remains authoritative; removing a
+recent entry never removes the project or any media.
+
+### 4.5 Preflight and export
 
 Before queueing, show an effective plan generated by the engine:
 
@@ -323,7 +431,7 @@ Before queueing, show an effective plan generated by the engine:
 The primary action should say **Add to Queue** once queueing exists. A secondary
 **Render now** is useful when the queue is empty.
 
-### 4.5 Queue and active render
+### 4.6 Queue and active render
 
 Each job card should show:
 
@@ -342,7 +450,7 @@ Initial concurrency should be one GPU render at a time. The queue architecture
 may later permit CPU-only probes and previews concurrently, but must avoid
 multiple uncoordinated Real-ESRGAN jobs exhausting VRAM.
 
-### 4.6 Completion and history
+### 4.7 Completion and history
 
 On completion:
 
@@ -401,10 +509,11 @@ warning badges need text or icons as well.
 
 ### 5.4 Undo and unsaved state
 
-Within a workspace, keep a bounded undo/redo stack of recipe edits. Mark a
-recipe dirty after changes. Closing or replacing a dirty workspace should
-offer to save a recipe; it should not imply that the source media itself was
-edited.
+Within a workspace, keep a bounded undo/redo stack spanning timeline, media-bin,
+and recipe edits. Project autosave persists the current revision; explicit
+**Save Recipe As** remains available for portable presets. Closing during a
+failed/pending save must offer Retry, Save elsewhere, or Discard. No state
+label should imply that non-destructive timeline edits changed source media.
 
 ## 6. CLI and Engine Expansion
 
@@ -427,6 +536,9 @@ auvide capabilities [--json]
 auvide doctor [--json] [--benchmark]
 auvide presets list [--json]
 auvide models list [--json]
+auvide project inspect PROJECT_DIR [--json]
+auvide project validate PROJECT_DIR [--json]
+auvide project render PROJECT_DIR [--sequence main]
 ```
 
 Migration approach:
@@ -523,7 +635,24 @@ This eliminates the current hand-maintained Recipe shape as the only guard
 against Python/TypeScript drift. Generated TypeScript types or runtime schema
 validation should be produced from the same schema in CI.
 
-### 6.5 Preview command
+### 6.5 Project and timeline contracts
+
+Add versioned `auvide.project` and `auvide.timeline` schemas. The project
+contract owns workspace identity, settings, media registry references, active
+timeline revision, and a conversion-status index. The timeline contract owns
+tracks, stable clip IDs, media IDs, source in/out ranges, timeline position,
+ordering, link groups, and enabled/muted state.
+
+Timeline resolution is engine-owned and deterministic. `project validate`
+checks schemas, paths, fingerprints, media compatibility, edit ranges, and
+status consistency without modifying sources. `project render` snapshots the
+resolved project/timeline/recipe into an immutable job before processing.
+
+Migrations preserve unknown additive fields where safe. A newer unsupported
+major version opens read-only with an actionable message rather than being
+silently rewritten.
+
+### 6.6 Preview command
 
 Promote preview from render flags to a first-class command:
 
@@ -546,7 +675,7 @@ previews safely.
 
 Preview cancellation must use the same run ID and cancel mechanism as renders.
 
-### 6.6 Batch and manifest input
+### 6.7 Batch and manifest input
 
 Replace the fixed `./input` limitation with:
 
@@ -561,7 +690,7 @@ Machine-readable batch progress includes `job_id`, `item_index`, and
 `item_count`. Default behavior continues after an item failure and returns a
 summary with a nonzero partial-failure exit code.
 
-### 6.7 Capabilities and doctor
+### 6.8 Capabilities and doctor
 
 `capabilities --json` should answer what is available, not mutate the machine:
 
@@ -587,7 +716,7 @@ source.color.metadata_missing
 job.output.same_as_input
 ```
 
-### 6.8 Progress protocol v2
+### 6.9 Progress protocol v2
 
 Finish wiring protocol v1 before extending it. The GUI should consume typed
 events from Rust, never parse human text.
@@ -607,7 +736,7 @@ Progress weighting must be engine-owned because only the engine knows the
 active stage plan. The frontend should display it, not guess that each stage
 costs the same.
 
-### 6.9 Exit codes
+### 6.10 Exit codes
 
 Document stable categories:
 
@@ -629,19 +758,19 @@ shell-friendly.
 
 ```text
 TypeScript UI
-  interaction, forms, preview presentation, queue views
+  interaction, media bin/timeline, forms, preview, queue views
         |
         | typed Tauri commands/events
         v
 Rust application service
-  process supervision, durable jobs, filesystem/dialog access,
-  tool bootstrap, protocol parsing, OS integration
+  project workspace I/O, process supervision, durable jobs,
+  filesystem/dialog access, tool bootstrap, protocol parsing, OS integration
         |
         | versioned recipe + CLI JSON/NDJSON
         v
 Python engine
-  defaults, validation, source inspection, effective plan,
-  preview/render execution, progress, processing
+  schemas, validation, timeline resolution, source inspection,
+  effective plan, preview/render execution, progress, processing
 ```
 
 Do not put FFmpeg filter construction, style resolution, target transforms, or
@@ -663,6 +792,9 @@ desktop/src/
   features/
     setup/
     import/
+    project/
+    media-bin/
+    timeline/
     workspace/
     preview/
     export/
@@ -678,6 +810,8 @@ desktop/src/
     toast.ts
   state/
     render-state.ts
+    project-state.ts
+    timeline-state.ts
     recipe-state.ts
     queue-state.ts
   styles/
@@ -700,6 +834,12 @@ Proposed commands:
 ```text
 get_app_health
 repair_component
+create_project
+open_project
+save_project
+close_project
+import_project_media
+relink_project_media
 inspect_media
 get_recipe_schema
 plan_job
@@ -722,7 +862,7 @@ contract stabilizes.
 
 ### 7.4 Persistent job store
 
-Use `app_data/jobs/<job-id>/` as the durable unit:
+Use `<project>/.auvide/jobs/<job-id>/` as the durable unit:
 
 ```text
 job.json              immutable submitted recipe and source
@@ -743,6 +883,10 @@ On app startup, reconcile `running` jobs:
 - If no owned child process remains, mark as interrupted.
 - If resumable work exists, offer Resume.
 - Never silently restart an expensive job.
+
+App data stores recent-project pointers and global setup/settings only.
+Project-specific jobs, history, cache policy, media registry, recipe, timeline,
+and conversion status remain with the project folder.
 
 ### 7.5 Process supervision and cancellation
 
@@ -812,6 +956,7 @@ Goal: expose the engine honestly with progressive disclosure.
 Deliverables:
 
 - New application shell and responsive workspace layout.
+- Default New Project/Open Folder modal with a side list of recent workspaces.
 - Drag/drop input and metadata inspection.
 - Full Recipe coverage: restore, motion, grade, LUT, HDR gain, encode, trim,
   audio, target, and advanced processing controls.
@@ -874,13 +1019,24 @@ Exit criteria:
 - Insufficient storage shows required/available values.
 - Estimates state their uncertainty and improve from observed history.
 
-### Phase 4 — Durable queue and history (C7, D3–D4, D6, X6–X7; train 0.5)
+### Phase 4 — Project workspaces, basic editing, queue, and history (0.5)
 
-Goal: make auvide useful for real workloads and overnight runs.
+Workstreams: C7, C10, D3–D4, D6, D8, and X6–X9.
+
+Goal: make auvide useful for persistent projects and real overnight workloads.
 
 Deliverables:
 
 - Persistent job folders and queue scheduler.
+- Create/open normal workspace folders with atomic autosave and schema
+  migration.
+- Make the no-project launch state the project chooser modal and maintain its
+  recent-workspace side list without copying project state into app storage.
+- Persist project settings, imported-media registry, timeline, conversion
+  status, job history, and disposable cache boundaries.
+- Media bin with linked or project-managed imports and offline relinking.
+- Video/audio timeline with MP3 import, detach audio/video, split/trim, delete,
+  snapping, undo/redo, and drag-to-rearrange.
 - Multi-file import and arbitrary-path batch manifests.
 - Reorder, cancel, resume, retry, duplicate, and remove.
 - Restart recovery and interrupted-job reconciliation.
@@ -891,6 +1047,10 @@ Deliverables:
 Exit criteria:
 
 - Queue state and completed history survive app restart.
+- Reopening or moving a managed-media project restores its edits and statuses.
+- Linked missing media is reported as offline and can be relinked.
+- Preview and render match the saved timeline revision, and running jobs remain
+  immutable when the project is edited.
 - Exactly one GPU-heavy render runs by default.
 - A failed job does not erase the remaining queue.
 - Resume reuses only compatible checkpoints.
@@ -916,7 +1076,7 @@ Exit criteria:
   the desktop happy path.
 - Update failure leaves the previous version runnable.
 
-### Phase 6 — Advanced creative possibilities (C9, X9; post-0.5)
+### Phase 6 — Advanced creative possibilities (C9, X10; post-0.5)
 
 Only begin after preview, preflight, and queue reliability:
 
@@ -945,6 +1105,9 @@ single-clip workflow.
 | P1 | Recipe save/load and custom presets | High | Versioned recipe |
 | P1 | Responsive/accessibility pass | High | New app shell |
 | P1 | Persistent queue/history | High | Durable job service |
+| P1 | Project workspace folders + autosave | Very high | Project schemas + workspace service |
+| P1 | Media bin + basic video/audio timeline | High | Project workspace + timeline contract |
+| P1 | MP3 import, detach, split/trim, rearrange | High | Timeline + preview/render resolution |
 | P1 | Setup/repair center | High | Bootstrap completion |
 | P2 | Short loop previews | Medium/high | Preview pipeline |
 | P2 | Scopes | Medium | Preview frames |
@@ -964,6 +1127,8 @@ P0 means necessary for a credible GUI, not necessarily one monolithic release.
 - CLI backward-compatibility tests for current render syntax.
 - Exit code and error code tests.
 - Batch partial-failure tests.
+- Project/timeline schema migration, deterministic edit resolution, and
+  immutable job-snapshot tests.
 - Existing synthetic FFmpeg integration test extended to compare planned and
   actual output properties.
 
@@ -973,6 +1138,10 @@ P0 means necessary for a credible GUI, not necessarily one monolithic release.
 - Child stdout/stderr routing tests.
 - Cooperative cancel then forced-termination tests.
 - Atomic job-state persistence and crash-recovery tests.
+- Workspace atomic-save/recovery, lock contention, traversal/path validation,
+  managed-media move, and offline relink tests.
+- Recent-project index tests for ordering, moved/missing folders, removal
+  without deletion, and crash-safe reopen.
 - Path validation and local preview asset tests.
 - Bootstrap health/repair state tests.
 
@@ -983,6 +1152,10 @@ P0 means necessary for a credible GUI, not necessarily one monolithic release.
 - Dependency/visibility tests, such as HDR gain hidden or disabled in SDR.
 - Preview stale/cache state tests.
 - Queue reorder and restart reconciliation tests.
+- Media-bin persistence plus timeline detach, split, trim, delete, snapping,
+  rearrangement, linking, and undo/redo tests.
+- Project chooser modal tests for default launch, keyboard operation, recent
+  selection, missing-folder recovery, and no-project action gating.
 - Keyboard navigation and automated accessibility checks.
 - Visual regression screenshots at minimum, default, and wide window sizes.
 
@@ -998,6 +1171,10 @@ Automate or manually certify:
 6. Run with unavailable QSV and recover to x265.
 7. Run out of planned scratch space before, not halfway through, a render.
 8. Use the entire primary flow with keyboard only.
+9. Create a project, import linked video and managed MP3 audio, detach source
+   audio, cut/rearrange clips, render, restart, and reopen with state intact.
+10. Move a managed-media project, relink one missing external asset, and verify
+    that an already queued job still uses its immutable timeline snapshot.
 
 ## 11. Product Metrics
 
@@ -1023,9 +1200,15 @@ used.
 
 ### Scope creep into a full editor
 
-Guardrail: auvide enhances and exports clips. Multi-track editing, transitions,
-titles, and audio mixing are out of scope until the enhancement workflow is
-excellent.
+Guardrail: auvide enhances and exports clips. Unbounded track layouts,
+transitions, titles, effect automation, nested timelines, and advanced audio
+mixing are out of scope. The supported preparation editor is limited to media
+import, basic video/audio tracks, detach, split/trim, delete, and rearrangement.
+
+### Project portability and corruption
+
+Guardrail: versioned manifests, atomic saves, recovery copies, explicit
+linked-versus-managed media, fingerprints/relinking, and startup reconciliation.
 
 ### Preview/render mismatch
 
@@ -1074,7 +1257,11 @@ Canonical leaf definitions and file boundaries are in Sections 7–8 of
 7. **Plan/preflight vertical** — C4, C6, X5.
 8. **Frame preview vertical** — C5.2–C5.5, D5, X4.1–X4.4.
 9. **Durable single job** — D3 plus restart reconciliation.
-10. **Queue/history vertical** — C7/C9, D4/D6, X6/X7.
+10. **Project workspace vertical** — C10 project/timeline schemas, D8
+    create/open/save/relink, and X9 project browser/media bin.
+11. **Basic editing vertical** — timeline preview/render resolution plus
+    detach, split/trim, delete, and rearrangement with undo/redo.
+12. **Queue/history vertical** — C7/C9, D4/D6, X6/X7.
 
 Avoid combining steps 1–2 with a framework migration or visual redesign.
 Contract producers, bridges, reducers, and views are separate leaf packets so
@@ -1086,6 +1273,12 @@ The objective is met when a first-time user can:
 
 - Install or repair all required components inside the app.
 - Drag in one or more videos and understand their source properties.
+- Create or open a project folder and recover its media, settings, edits,
+  conversion status, and history after restart.
+- Start in a clear New Project/Open Folder modal and reopen a recent workspace
+  from the list at its side.
+- Add MP3 audio, detach a video's audio, cut/trim clips, and rearrange audio and
+  video non-destructively.
 - Choose a good result using plain-language presets.
 - Inspect a representative real AI before/after preview.
 - Refine every supported recipe setting without using the terminal.

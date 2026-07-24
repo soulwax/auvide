@@ -7,6 +7,8 @@ pub const PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProgressEnvelope {
+    pub protocol: String,
+    pub version: u32,
     pub run_id: String,
     pub event: ProgressEvent,
 }
@@ -121,6 +123,8 @@ pub fn parse_progress_line(line: &str) -> Result<ParsedProgressLine, ProtocolErr
     let event = serde_json::from_value(value)
         .map_err(|error| ProtocolError::InvalidEvent(error.to_string()))?;
     Ok(ParsedProgressLine::Known(ProgressEnvelope {
+        protocol: PROTOCOL_NAME.into(),
+        version: PROTOCOL_VERSION,
         run_id: envelope.run_id,
         event,
     }))
@@ -154,6 +158,8 @@ mod tests {
         assert_eq!(
             result,
             ParsedProgressLine::Known(super::ProgressEnvelope {
+                protocol: super::PROTOCOL_NAME.into(),
+                version: super::PROTOCOL_VERSION,
                 run_id: "run-1".into(),
                 event: ProgressEvent::Progress {
                     stage: "encode".into(),
