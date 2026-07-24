@@ -62,6 +62,22 @@ Lock these before touching code; everything downstream depends on them.
 - **Support matrix**, stated in the README: Windows 10+ / macOS 13+ / mainstream Linux; any Vulkan-capable GPU; Python floor stays 3.9 for the pip CLI, bundled runtime is 3.12.
 - **The Tkinter GUI (`gui.py`) is legacy**: it moves to `legacy/`, keeps working, gets no new features. The Tauri app is the GUI going forward. Maintaining two GUIs is how both stay mediocre.
 
+## Delivery Discipline - Every Implementation Slice
+
+- Deliver a completed slice as one focused Conventional Commit made with the
+  maintainer's configured signed identity. Before committing, verify
+  `git config user.name`, `git config user.email`, and signing configuration;
+  use `git commit -S` and verify the resulting signature.
+- Push that signed commit to `origin` before beginning the next slice. A slice
+  is not complete until the push succeeds; report a signing or push failure as
+  a blocker rather than silently continuing locally.
+- Maintain the canonical root `VERSION` and `CHANGELOG.md` in the same slice
+  whenever a user-visible behavior or release version changes. Use
+  `python scripts/sync_version.py --set X.Y.Z` for version changes and run
+  `python scripts/sync_version.py --check` before committing.
+- Inspect the worktree before staging so unrelated user changes are never
+  included. Record the commit and pushed ref in the packet handoff.
+
 ## Phase 1 — One source of truth + repo hygiene (1–2 days)
 
 **Restructure to a real monorepo.** The engine becomes a proper installable package; both the CLI and the desktop app consume it from one place:

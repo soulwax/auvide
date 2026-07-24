@@ -7,10 +7,18 @@ and uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Added
+
+- A version synchronization check for Python, npm, Cargo, and Tauri metadata.
+- Cooperative, resumable render cancellation and versioned NDJSON progress
+  events for engine consumers.
+- Desktop runtime path and persisted runtime-state foundations.
+
 ### Changed
 
 - Desktop product identity is `auvide` with the stable identifier
   `com.soulwax.auvide`.
+- Tool discovery now supports managed desktop runtime and model overrides.
 
 ## 0.2.0
 

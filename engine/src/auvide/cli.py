@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import NoReturn
@@ -47,6 +48,8 @@ INPUT_DIR = HERE / "input"
 OUTPUT_DIR = HERE / "output"
 VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v"}
 REPORTER = Reporter()
+CANCEL_FILE: Path | None = None
+WORK_DIR: Path | None = None
 
 # model key -> (realesrgan model name, native scale or None for "any 2/3/4")
 MODEL_MAP = {
@@ -72,6 +75,32 @@ def die(msg: str) -> NoReturn:
     REPORTER.event("failed", code="pipeline_error", message=msg)
     print(f"\n[error] {msg}", file=sys.stderr)
     sys.exit(1)
+
+
+class Cancelled(RuntimeError):
+    pass
+
+
+def cancel_requested() -> bool:
+    return CANCEL_FILE is not None and CANCEL_FILE.exists()
+
+
+def check_cancelled() -> None:
+    if cancel_requested():
+        raise Cancelled
+
+
+def finish_cancelled() -> NoReturn:
+    if WORK_DIR:
+        for batch_dir in WORK_DIR.glob("batch_*"):
+            shutil.rmtree(batch_dir, ignore_errors=True)
+    REPORTER.event(
+        "cancelled",
+        resumable=WORK_DIR is not None,
+        work_dir=str(WORK_DIR) if WORK_DIR else "",
+    )
+    REPORTER.log("[interrupted] re-run with --resume to continue", error=True)
+    sys.exit(130)
 
 
 def resolve_input(arg) -> Path:
@@ -282,10 +311,36 @@ _NOWINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
 def run(cmd: list[str], quiet: bool = True, cwd=None) -> None:
-    r = subprocess.run(cmd, stdout=subprocess.DEVNULL if quiet else None,
-                       stderr=subprocess.PIPE, text=True, creationflags=_NOWINDOW, cwd=cwd)
-    if r.returncode != 0:
-        die(f"command failed ({cmd[0]}):\n{r.stderr[-2000:]}")
+    child = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL if quiet else None,
+        stderr=subprocess.PIPE,
+        text=True,
+        creationflags=_NOWINDOW,
+        cwd=cwd,
+    )
+    stderr: list[str] = []
+
+    def drain_stderr() -> None:
+        if child.stderr:
+            stderr.append(child.stderr.read())
+
+    reader = threading.Thread(target=drain_stderr, daemon=True)
+    reader.start()
+    while child.poll() is None:
+        if cancel_requested():
+            child.terminate()
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
+            reader.join()
+            raise Cancelled
+        time.sleep(0.1)
+    reader.join()
+    if child.returncode != 0:
+        die(f"command failed ({cmd[0]}):\n{''.join(stderr)[-2000:]}")
 
 
 def fmt_eta(seconds: float) -> str:
@@ -368,10 +423,16 @@ def main() -> None:
     ap.add_argument("--progress-json", action="store_true",
                     help="emit versioned NDJSON progress events on stdout")
     ap.add_argument("--run-id", help=argparse.SUPPRESS)
+    ap.add_argument("--cancel-file", type=Path, help=argparse.SUPPRESS)
     args = ap.parse_args()
 
-    global REPORTER
+    global REPORTER, CANCEL_FILE, WORK_DIR
     REPORTER = Reporter(args.progress_json, args.run_id)
+    CANCEL_FILE = args.cancel_file.expanduser() if args.cancel_file else None
+    WORK_DIR = None
+    if CANCEL_FILE and not CANCEL_FILE.is_absolute():
+        die("--cancel-file must be an absolute path")
+    stages.set_cancel_checker(cancel_requested)
 
     if args.dump_config and args.progress_json:
         die("--dump-config cannot be combined with --progress-json")
@@ -424,6 +485,7 @@ def main() -> None:
         args._lut_cwd = str(tools.APP_CACHE)
 
     check_deps()
+    check_cancelled()
 
     if args.batch:
         vids = ([p for p in sorted(INPUT_DIR.glob("*")) if p.suffix.lower() in VIDEO_EXTS]
@@ -462,6 +524,7 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
 
     work = (args.work or Path(tempfile.gettempdir()) / "auvide" / src.stem).resolve()
+    WORK_DIR = work
     frames_in = work / "frames_in"
     seg_dir = work / "segments"
     for d in (frames_in, seg_dir):
@@ -532,6 +595,7 @@ def main() -> None:
     if args.dry_run:
         return
     if args.preview:
+        check_cancelled()
         make_preview(args, src, info)
         return
 
@@ -553,6 +617,7 @@ def main() -> None:
         print(f"[1/3] frames: reusing {have} extracted frames")
         stage_completed("extract")
     else:
+        check_cancelled()
         cwd = None
         if args.stabilize:
             stage_started("stabilize_analysis")
@@ -609,6 +674,7 @@ def main() -> None:
     run_start = time.time()
 
     for c in range(n_chunks):
+        check_cancelled()
         start = c * args.chunk + 1                     # 1-based global index
         if start > total:
             break
@@ -643,6 +709,8 @@ def main() -> None:
                 if cur is not batch_in:
                     shutil.rmtree(cur, ignore_errors=True)
                 cur = nxt
+        except stages.StageCancelled:
+            raise Cancelled
         except stages.StageError as e:
             die(str(e))
         pattern = normalize_seq(cur)
@@ -669,6 +737,7 @@ def main() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
     # ---- phase 3: concat + mux audio -------------------------------------
+    check_cancelled()
     stage_started("concat_mux")
     print("[3/3] concatenating chunks + muxing audio ...", flush=True)
     segs = sorted(seg_dir.glob("seg_*.mp4"))
@@ -713,6 +782,7 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
+    except Cancelled:
+        finish_cancelled()
     except KeyboardInterrupt:
-        print("\n[interrupted] re-run with --resume to continue", file=sys.stderr)
-        sys.exit(130)
+        finish_cancelled()

@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 from . import tools
 
@@ -23,6 +25,23 @@ NOWINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 class StageError(RuntimeError):
     pass
+
+
+class StageCancelled(StageError):
+    pass
+
+
+def _not_cancelled() -> bool:
+    return False
+
+
+_cancel_requested: Callable[[], bool] = _not_cancelled
+
+
+def set_cancel_checker(checker: Callable[[], bool]) -> None:
+    """Set the per-render cancellation check used by long-running AI stages."""
+    global _cancel_requested
+    _cancel_requested = checker
 
 
 class Stage(Protocol):
@@ -35,9 +54,35 @@ class Stage(Protocol):
 
 
 def _run(cmd):
-    r = subprocess.run(cmd, capture_output=True, text=True, creationflags=NOWINDOW)
-    if r.returncode != 0:
-        raise StageError(f"{Path(cmd[0]).name} failed:\n{r.stderr[-800:]}")
+    child = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        creationflags=NOWINDOW,
+    )
+    stderr: list[str] = []
+
+    def drain_stderr() -> None:
+        if child.stderr:
+            stderr.append(child.stderr.read())
+
+    reader = threading.Thread(target=drain_stderr, daemon=True)
+    reader.start()
+    while child.poll() is None:
+        if _cancel_requested():
+            child.terminate()
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
+            reader.join()
+            raise StageCancelled("frame stage cancelled")
+        time.sleep(0.1)
+    reader.join()
+    if child.returncode != 0:
+        raise StageError(f"{Path(cmd[0]).name} failed:\n{''.join(stderr)[-800:]}")
 
 
 class UpscaleStage:

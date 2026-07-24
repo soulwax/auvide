@@ -192,6 +192,51 @@ def test_progress_json_is_pure_ndjson_with_ordered_terminal_events(
     assert "[1/3]" in result.stderr
 
 
+def test_cancel_after_completed_chunk_is_resumable(
+        synthetic_clip, tmp_path, env_with_fake_tools):
+    out = tmp_path / "out_cancelled.mp4"
+    work = tmp_path / "work"
+    cancel_file = tmp_path / "cancel.requested"
+    common = [
+        str(synthetic_clip), "-o", str(out), "--scale", "2", "--hdr", "off",
+        "--work", str(work), "--chunk", "8", "--vibrance", "none", "--keep",
+    ]
+    child = subprocess.Popen(
+        [sys.executable, "-m", "auvide.cli", *common, "--progress-json", "--run-id", "cancel-test",
+         "--cancel-file", str(cancel_file)],
+        cwd=str(tmp_path), env=env_with_fake_tools, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert child.stdout is not None
+    events = []
+    while True:
+        line = child.stdout.readline()
+        if not line:
+            break
+        event = json.loads(line)
+        events.append(event)
+        if event["type"] == "progress" and event["current"] >= 1:
+            cancel_file.touch()
+            break
+
+    stdout, stderr = child.communicate(timeout=60)
+    events.extend(json.loads(line) for line in stdout.splitlines() if line)
+
+    assert child.returncode == 130, stderr
+    assert events[-1]["type"] == "cancelled"
+    assert events[-1]["resumable"] is True
+
+    segments = sorted((work / "segments").glob("seg_*.mp4"))
+    assert segments
+    mtimes_before = {segment: segment.stat().st_mtime_ns for segment in segments}
+
+    resumed = run_cli(common + ["--resume"], cwd=tmp_path, env=env_with_fake_tools)
+    assert resumed.returncode == 0, resumed.stderr
+    assert out.exists()
+    for segment, before in mtimes_before.items():
+        assert segment.stat().st_mtime_ns == before, f"{segment.name} was re-encoded after resume"
+
+
 def test_resume_skips_completed_chunks(synthetic_clip, tmp_path, env_with_fake_tools):
     out = tmp_path / "out.mp4"
     work = tmp_path / "work"

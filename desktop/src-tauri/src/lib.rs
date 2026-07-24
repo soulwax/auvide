@@ -2,6 +2,9 @@
 // The pipeline is NOT reimplemented here: we build a recipe in the frontend,
 // hand it to the auvide.cli engine (via `uv run -m auvide.cli`), and stream
 // its progress back as events.
+pub mod paths;
+pub mod runtime;
+
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
