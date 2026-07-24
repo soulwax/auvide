@@ -2,6 +2,7 @@
 // The pipeline is NOT reimplemented here: we build a recipe in the frontend,
 // hand it to the auvide.cli engine (via the bundled `uv` sidecar), and stream
 // its progress back as events.
+pub mod bootstrap;
 pub mod paths;
 pub mod protocol;
 pub mod runtime;

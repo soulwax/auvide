@@ -28,6 +28,8 @@ and uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   of requiring a globally installed `uv` executable.
 - The desktop now provisions a serialized, app-data-owned Python 3.12 venv and
   invokes the engine directly from that venv on later requests.
+- Strict typed validation for the desktop bootstrap manifest before downloads
+  or archive extraction are introduced.
 
 ### Changed
 
